@@ -2633,12 +2633,16 @@ GroupInstanceReferenceImpl::GroupInstanceReferenceImpl(GroupInstanceDescriptor &
     // AddLogToStream every reference-engine call wrote an EMPTY log file, so no
     // call using this engine could be diagnosed from a log at all (the
     // destructor's RemoveLogToStream was removing a stream that was never added).
-    if (descriptor.config.need_log) {
+    // Without a file the sink keeps every log line in memory and nothing reads it.
+    if (descriptor.config.need_log && !descriptor.config.logPath.data.empty()) {
         _logSink = std::make_unique<LogSinkImpl>(descriptor.config.logPath);
-        rtc::LogMessage::SetLogToStderr(true);
-    } else {
-        rtc::LogMessage::SetLogToStderr(false);
     }
+#if defined(NDEBUG) && defined(WEBRTC_IOS)
+    // Nobody reads an iOS app's stderr in release; each line costs a write and an fflush.
+    rtc::LogMessage::SetLogToStderr(false);
+#else
+    rtc::LogMessage::SetLogToStderr(descriptor.config.need_log);
+#endif
     rtc::LogMessage::LogToDebug(rtc::LS_INFO);
     if (_logSink) {
         rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);

@@ -76,6 +76,7 @@ private:
     int _currentSampleRate = 0;
 
     DenoiseState *_denoiseState = nullptr;
+    std::unique_ptr<webrtc::AudioBuffer> _resampledBuffer;
     std::vector<float> _frameSamples;
     int32_t _peakCount = 0;
     float _peak = 0;

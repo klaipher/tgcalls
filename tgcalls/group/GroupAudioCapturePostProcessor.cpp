@@ -59,6 +59,7 @@ AudioCapturePostProcessor::~AudioCapturePostProcessor() {
 
 void AudioCapturePostProcessor::Initialize(int sample_rate_hz, int num_channels) {
     _currentSampleRate = sample_rate_hz;
+    _resampledBuffer.reset();
 }
 
 void AudioCapturePostProcessor::Process(webrtc::AudioBuffer *originalBuffer) {
@@ -73,16 +74,15 @@ void AudioCapturePostProcessor::Process(webrtc::AudioBuffer *originalBuffer) {
     }
     
     webrtc::AudioBuffer *buffer = originalBuffer;
-    bool freeBuffer = false;
     
     if (buffer->num_frames() != _frameSamples.size()) {
-        //TODO:optimize by running processing in another thread
-        freeBuffer = true;
-        size_t sourceSampleRate = _currentSampleRate;
-        webrtc::AudioBuffer *newBuffer = new webrtc::AudioBuffer(sourceSampleRate, 1, 48000, 1, 48000, 1);
-        webrtc::StreamConfig config((int)sourceSampleRate, 1);
-        newBuffer->CopyFrom(buffer->channels(), config);
-        buffer = newBuffer;
+        // Kept across frames: building one allocates and initializes resamplers and a band filter.
+        if (!_resampledBuffer) {
+            _resampledBuffer = std::make_unique<webrtc::AudioBuffer>((size_t)_currentSampleRate, 1, 48000, 1, 48000, 1);
+        }
+        webrtc::StreamConfig config(_currentSampleRate, 1);
+        _resampledBuffer->CopyFrom(buffer->channels(), config);
+        buffer = _resampledBuffer.get();
     }
 
     float sourcePeak = 0.0f;
@@ -179,10 +179,6 @@ void AudioCapturePostProcessor::Process(webrtc::AudioBuffer *originalBuffer) {
             }
         }
         _externalAudioSamplesMutex->Unlock();
-    }
-    
-    if (freeBuffer) {
-        delete buffer;
     }
 }
 
