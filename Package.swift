@@ -20,6 +20,7 @@ let package = Package(
             path: ".",
             exclude: ["LICENSE",
                       "README.md",
+                      "tests",
                       "tgcalls/platform/android",
                       "tgcalls/platform/tdesktop",
                       "tgcalls/platform/uwp",
