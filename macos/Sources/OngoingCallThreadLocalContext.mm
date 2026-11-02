@@ -1474,7 +1474,7 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
         bool disableOutgoingAudioProcessing = false;
 
         tgcalls::GroupConfig config;
-        config.need_log = true;
+        config.need_log = logPath.length > 0;
         config.logPath.data = std::string(logPath.length == 0 ? "" : logPath.UTF8String);
         
         std::string statsLogPathValue(statsLogPath.length == 0 ? "" : statsLogPath.UTF8String);
