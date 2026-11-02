@@ -4521,13 +4521,16 @@ private:
 };
 
 GroupInstanceCustomImpl::GroupInstanceCustomImpl(GroupInstanceDescriptor &&descriptor) {
-    if (descriptor.config.need_log) {
-      _logSink = std::make_unique<LogSinkImpl>(descriptor.config.logPath);
-      rtc::LogMessage::SetLogToStderr(true);
-    } else {
-        rtc::LogMessage::SetLogToStderr(false);
+    if (descriptor.config.need_log && !descriptor.config.logPath.data.empty()) {
+        _logSink = std::make_unique<LogSinkImpl>(descriptor.config.logPath);
     }
+#if DEBUG
+    rtc::LogMessage::SetLogToStderr(descriptor.config.need_log);
     rtc::LogMessage::LogToDebug(rtc::LS_INFO);
+#else
+    rtc::LogMessage::SetLogToStderr(false);
+    rtc::LogMessage::LogToDebug(rtc::LS_NONE);
+#endif
     if (_logSink) {
         rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
     }
