@@ -77,4 +77,12 @@ void LogSinkImpl::OnLogMessage(const std::string &message) {
 #endif
 }
 
+void configureDebugLogging(rtc::LoggingSeverity debugBuildSeverity) {
+#ifdef DEBUG
+	rtc::LogMessage::LogToDebug(debugBuildSeverity);
+#else
+	rtc::LogMessage::LogToDebug(rtc::LS_NONE);
+#endif
+}
+
 } // namespace tgcalls

@@ -27,6 +27,8 @@ private:
 
 };
 
+void configureDebugLogging(rtc::LoggingSeverity debugBuildSeverity);
+
 } // namespace tgcalls
 
 #endif

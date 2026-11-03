@@ -63,9 +63,21 @@ static void unopenablePathKeepsLines() {
     expect(sink.result().find("line") != std::string::npos, "a path that cannot be opened still keeps lines for the debug log");
 }
 
+static void debugLogThresholdFollowsBuild() {
+    rtc::LogMessage::LogToDebug(rtc::LS_INFO);
+    tgcalls::configureDebugLogging(rtc::LS_VERBOSE);
+#ifdef DEBUG
+    expect(rtc::LogMessage::GetLogToDebug() == rtc::LS_VERBOSE, "debug builds print the requested severity to the debug log");
+#else
+    expect(rtc::LogMessage::GetLogToDebug() == rtc::LS_NONE, "release builds print nothing to the debug log");
+    expect(!RTC_LOG_CHECK_LEVEL(LS_INFO), "release builds skip formatting INFO lines when no sink wants them");
+#endif
+}
+
 int main() {
     emptyPathKeepsNothing();
     filePathWritesLines();
     unopenablePathKeepsLines();
+    debugLogThresholdFollowsBuild();
     return failures == 0 ? 0 : 1;
 }
