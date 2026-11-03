@@ -10,6 +10,7 @@
 
 static NSString *const vertexFunctionName = @"vertexPassthrough";
 static NSString *const fragmentFunctionName = @"fragmentColorConversion";
+static NSString *const fragmentNV12FunctionName = @"fragmentColorConversionNV12";
 static NSString *const fragmentDoTransformFilter = @"doTransformFilter";
 static NSString *const twoInputVertexName = @"twoInputVertex";
 static NSString *const transformAndBlendName = @"transformAndBlend";
@@ -23,6 +24,7 @@ static NSString *const fragmentPlainName = @"fragmentPlain";
     id<MTLDevice> _device;
     
     id<MTLRenderPipelineState> _pipelineYuvRgb;
+    id<MTLRenderPipelineState> _pipelineNv12Rgb;
     id<MTLRenderPipelineState> _pipelineTransformAndBlend;
     id<MTLRenderPipelineState> _pipelineScaleAndBlur;
     id<MTLRenderPipelineState> _pipelineThrough;
@@ -75,6 +77,19 @@ static NSString *const fragmentPlainName = @"fragmentPlain";
     }
     {
         id<MTLFunction> vertexFunction = [_defaultLibrary newFunctionWithName:vertexFunctionName];
+        id<MTLFunction> fragmentFunction = [_defaultLibrary newFunctionWithName:fragmentNV12FunctionName];
+        if (fragmentFunction != nil) {
+            MTLRenderPipelineDescriptor *pipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
+            pipelineDescriptor.vertexFunction = vertexFunction;
+            pipelineDescriptor.fragmentFunction = fragmentFunction;
+            pipelineDescriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+            pipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatInvalid;
+            NSError *error = nil;
+            _pipelineNv12Rgb = [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error];
+        }
+    }
+    {
+        id<MTLFunction> vertexFunction = [_defaultLibrary newFunctionWithName:vertexFunctionName];
         id<MTLFunction> fragmentFunction = [_defaultLibrary newFunctionWithName:fragmentPlainName];
 
         MTLRenderPipelineDescriptor *pipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
@@ -117,6 +132,9 @@ static NSString *const fragmentPlainName = @"fragmentPlain";
 }
 -(id<MTLRenderPipelineState>)pipelineYuvRgb {
     return _pipelineYuvRgb;
+}
+-(id<MTLRenderPipelineState>)pipelineNv12Rgb {
+    return _pipelineNv12Rgb;
 }
 -(id<MTLRenderPipelineState>)pipelineTransformAndBlend {
     return _pipelineTransformAndBlend;

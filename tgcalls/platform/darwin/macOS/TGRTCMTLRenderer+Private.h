@@ -18,6 +18,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface TGRTCMTLRenderer (Private)
 - (nullable id<MTLDevice>)currentMetalDevice;
+- (nullable id<MTLRenderPipelineState>)nv12PipelineState;
 - (NSString *)shaderSource;
 - (BOOL)setupTexturesForFrame:(nonnull RTC_OBJC_TYPE(RTCVideoFrame) *)frame;
 - (void)uploadTexturesToRenderEncoder:(id<MTLRenderCommandEncoder>)renderEncoder;

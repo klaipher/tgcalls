@@ -20,6 +20,8 @@
 #import "api/media_stream_interface.h"
 
 #import "tgcalls/platform/darwin/macOS/TGRTCMTLI420Renderer.h"
+#import "tgcalls/platform/darwin/macOS/TGRTCVideoYUVConversion.h"
+#include "api/video/color_space.h"
 
 #define MTKViewClass NSClassFromString(@"MTKView")
 #define TGRTCMTLI420RendererClass NSClassFromString(@"TGRTCMTLI420Renderer")
@@ -35,6 +37,18 @@ static RTCVideoFrame *customToObjCVideoFrame(const webrtc::VideoFrame &frame, RT
                                  rotation:rotation
                               timeStampNs:frame.timestamp_us() * rtc::kNumNanosecsPerMicrosec];
     videoFrame.timeStamp = frame.timestamp();
+    if (frame.video_frame_buffer()->type() != webrtc::VideoFrameBuffer::Type::kNative && frame.color_space().has_value()) {
+        const webrtc::ColorSpace &colorSpace = frame.color_space().value();
+        if (colorSpace.range() == webrtc::ColorSpace::RangeID::kLimited || colorSpace.range() == webrtc::ColorSpace::RangeID::kFull) {
+            TGRTCYCbCrMatrix matrix = TGRTCYCbCrMatrixBT601;
+            if (colorSpace.matrix() == webrtc::ColorSpace::MatrixID::kBT709) {
+                matrix = TGRTCYCbCrMatrixBT709;
+            } else if (colorSpace.matrix() == webrtc::ColorSpace::MatrixID::kBT2020_NCL) {
+                matrix = TGRTCYCbCrMatrixBT2020;
+            }
+            TGRTCVideoFrameSetYUVColorSpace(videoFrame, matrix, colorSpace.range() == webrtc::ColorSpace::RangeID::kFull);
+        }
+    }
     
     return videoFrame;
 }
