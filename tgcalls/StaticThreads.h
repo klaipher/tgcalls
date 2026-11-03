@@ -22,6 +22,9 @@ public:
 };
 
 namespace StaticThreads {
+
+// Apple only: applies or restores user-initiated QoS on every live tgcalls thread, following RuntimeOptions::threadQoS().
+void applyQoS();
 rtc::Thread *getNetworkThread();
 rtc::Thread *getMediaThread();
 rtc::Thread *getWorkerThread();

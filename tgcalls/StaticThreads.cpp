@@ -5,6 +5,12 @@
 
 #include <mutex>
 #include <algorithm>
+#include <vector>
+
+#ifdef __APPLE__
+#include <pthread/qos.h>
+#include "platform/darwin/TGCallsRuntimeOptions.h"
+#endif
 
 namespace tgcalls {
 
@@ -55,6 +61,31 @@ private:
   }
 };
 
+namespace {
+
+std::mutex &registryMutex() {
+  static std::mutex value;
+  return value;
+}
+
+std::vector<rtc::Thread *> &registry() {
+  static std::vector<rtc::Thread *> value;
+  return value;
+}
+
+void applyQoSToThread(rtc::Thread *thread) {
+#ifdef __APPLE__
+  const bool enabled = RuntimeOptions::threadQoS().load();
+  thread->PostTask([enabled]() {
+    pthread_set_qos_class_self_np(enabled ? QOS_CLASS_USER_INITIATED : QOS_CLASS_DEFAULT, 0);
+  });
+#else
+  (void)thread;
+#endif
+}
+
+}
+
 class ThreadsImpl : public Threads {
   using Thread = std::unique_ptr<rtc::Thread>;
 public:
@@ -71,6 +102,20 @@ public:
     //network_->DisallowAllInvokes();
     //worker_->DisallowAllInvokes();
     //worker_->AllowInvokesToThread(network_.get());
+
+    std::unique_lock<std::mutex> lock(registryMutex());
+    for (auto *thread : {media_.get(), worker_.get(), network_.get()}) {
+      registry().push_back(thread);
+      applyQoSToThread(thread);
+    }
+  }
+
+  ~ThreadsImpl() override {
+    std::unique_lock<std::mutex> lock(registryMutex());
+    auto &threads = registry();
+    for (auto *thread : {media_.get(), worker_.get(), network_.get()}) {
+      threads.erase(std::remove(threads.begin(), threads.end(), thread), threads.end());
+    }
   }
 
   rtc::Thread *getNetworkThread() override {
@@ -122,6 +167,13 @@ std::shared_ptr<Threads> Threads::getThreads(){
 }
 
 namespace StaticThreads {
+
+void applyQoS() {
+  std::unique_lock<std::mutex> lock(registryMutex());
+  for (auto *thread : registry()) {
+    applyQoSToThread(thread);
+  }
+}
 
 rtc::Thread *getNetworkThread() {
   return getThreads()->getNetworkThread();

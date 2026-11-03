@@ -5,8 +5,41 @@
 #include "MediaManager.h"
 #include "platform/PlatformInterface.h"
 #include "StaticThreads.h"
+#include "CallSystemPolicy.h"
+
+#include <mutex>
+#include <vector>
+#include <algorithm>
+
+#ifdef __APPLE__
+#include "platform/darwin/TGCallsRuntimeOptions.h"
+#endif
 
 namespace tgcalls {
+
+namespace {
+
+std::mutex &captureRegistryMutex() {
+    static std::mutex value;
+    return value;
+}
+
+std::vector<VideoCaptureInterfaceImpl *> &captureRegistry() {
+    static std::vector<VideoCaptureInterfaceImpl *> value;
+    return value;
+}
+
+void currentOutgoingLimit(int &maxShortSide, int &maxFps) {
+#ifdef __APPLE__
+    maxShortSide = RuntimeOptions::outgoingCameraMaxShortSide().load();
+    maxFps = RuntimeOptions::outgoingCameraMaxFps().load();
+#else
+    maxShortSide = 0;
+    maxFps = 0;
+#endif
+}
+
+}
 
 VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::string deviceId, bool isScreenCapture, std::shared_ptr<PlatformContext> platformContext, Threads &threads)
 : _videoSource(PlatformInterface::SharedInstance()->makeVideoSource(threads.getMediaThread(), threads.getWorkerThread())) {
@@ -126,12 +159,29 @@ void VideoCaptureInterfaceObject::updateAspectRateAdaptation() {
                     ? originalHeight
                     : int(std::round(originalHeight / aspectRatio));
 
-                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, (int)width, (int)height, 25);
+                adaptToOutgoingLimit((int)width, (int)height);
             } else {
-                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, _videoCapturerResolution.first, _videoCapturerResolution.second, 25);
+                adaptToOutgoingLimit(_videoCapturerResolution.first, _videoCapturerResolution.second);
             }
         }
     }
+}
+
+void VideoCaptureInterfaceObject::adaptToOutgoingLimit(int width, int height) {
+    int maxShortSide = 0;
+    int maxFps = 0;
+    if (!_isScreenCapture) {
+        currentOutgoingLimit(maxShortSide, maxFps);
+    }
+    const auto size = systempolicy::limitOutgoingVideo(width, height, 25, maxShortSide, maxFps);
+    if (size.width != width || size.height != height || size.fps != 25) {
+        RTC_LOG(LS_INFO) << "Outgoing camera video limited to " << size.width << "x" << size.height << " at " << size.fps << " fps";
+    }
+    PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, size.width, size.height, size.fps);
+}
+
+void VideoCaptureInterfaceObject::reapplyOutgoingLimit() {
+    updateAspectRateAdaptation();
 }
 
 void VideoCaptureInterfaceObject::setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
@@ -170,9 +220,24 @@ VideoCaptureInterfaceImpl::VideoCaptureInterfaceImpl(std::string deviceId, bool 
 _impl(threads->getMediaThread(), [deviceId, isScreenCapture, platformContext, threads]() {
 	return std::make_shared<VideoCaptureInterfaceObject>(deviceId, isScreenCapture, platformContext, *threads);
 }) {
+    std::unique_lock<std::mutex> lock(captureRegistryMutex());
+    captureRegistry().push_back(this);
 }
 
-VideoCaptureInterfaceImpl::~VideoCaptureInterfaceImpl() = default;
+VideoCaptureInterfaceImpl::~VideoCaptureInterfaceImpl() {
+    std::unique_lock<std::mutex> lock(captureRegistryMutex());
+    auto &registry = captureRegistry();
+    registry.erase(std::remove(registry.begin(), registry.end(), this), registry.end());
+}
+
+void VideoCaptureInterfaceImpl::reapplyOutgoingLimits() {
+    std::unique_lock<std::mutex> lock(captureRegistryMutex());
+    for (auto *capture : captureRegistry()) {
+        capture->_impl.perform([](VideoCaptureInterfaceObject *impl) {
+            impl->reapplyOutgoingLimit();
+        });
+    }
+}
 
 void VideoCaptureInterfaceImpl::switchToDevice(std::string deviceId, bool isScreenCapture) {
 	_impl.perform([deviceId, isScreenCapture](VideoCaptureInterfaceObject *impl) {

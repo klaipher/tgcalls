@@ -1,5 +1,6 @@
 #include "v2/InstanceV2Impl.h"
 #include "CallAudioPolicy.h"
+#include "CallSystemPolicy.h"
 
 #include "LogSinkImpl.h"
 #include "VideoCaptureInterfaceImpl.h"
@@ -1189,26 +1190,11 @@ public:
 
         adjustBitratePreferences(true);
 
-        beginQualityTimer(0);
         beginLogTimer(0);
 
         InstanceNetworking::State initialNetworkState;
         initialNetworkState.isReadyToSendData = false;
         onNetworkStateUpdated(initialNetworkState);
-    }
-
-    void beginQualityTimer(int delayMs) {
-        const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
-        _threads->getMediaThread()->PostDelayedTask([weak]() {
-            auto strong = weak.lock();
-            if (!strong) {
-                return;
-            }
-
-
-
-            strong->beginQualityTimer(500);
-        }, webrtc::TimeDelta::Millis(delayMs));
     }
 
     void beginLogTimer(int delayMs) {
@@ -1221,7 +1207,7 @@ public:
 
             strong->writeStateLogRecords();
 
-            strong->beginLogTimer(1000);
+            strong->beginLogTimer(systempolicy::kStatsIntervalMs);
         }, webrtc::TimeDelta::Millis(delayMs));
     }
 

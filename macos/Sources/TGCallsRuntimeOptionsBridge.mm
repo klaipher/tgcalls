@@ -2,6 +2,8 @@
 
 #include "platform/darwin/TGCallsRuntimeOptions.h"
 #include "CallAudioPolicy.h"
+#include "VideoCaptureInterfaceImpl.h"
+#include "StaticThreads.h"
 #include "modules/audio_device/mac/audio_device_mac_options.h"
 
 @implementation TGCallsRuntimeOptionsBridge
@@ -44,6 +46,21 @@
 
 + (void)setAudioWorkgroupEnabled:(BOOL)enabled {
     webrtc::AudioDeviceMacOptions::joinDeviceWorkgroup().store(enabled);
+}
+
++ (void)setThreadQoSEnabled:(BOOL)enabled {
+    tgcalls::RuntimeOptions::threadQoS().store(enabled);
+    tgcalls::StaticThreads::applyQoS();
+}
+
++ (void)setLivestreamVideoSuspended:(BOOL)suspended {
+    tgcalls::RuntimeOptions::livestreamVideoSuspended().store(suspended);
+}
+
++ (void)setOutgoingCameraLimitWithMaxShortSide:(NSInteger)maxShortSide maxFps:(NSInteger)maxFps {
+    tgcalls::RuntimeOptions::outgoingCameraMaxShortSide().store((int)maxShortSide);
+    tgcalls::RuntimeOptions::outgoingCameraMaxFps().store((int)maxFps);
+    tgcalls::VideoCaptureInterfaceImpl::reapplyOutgoingLimits();
 }
 
 @end

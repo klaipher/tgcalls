@@ -893,6 +893,13 @@ public:
         }
     }
 
+    absl::optional<double> nextFramePts() const {
+        if (_availableFrames.size() >= 2) {
+            return _availableFrames[1].pts;
+        }
+        return absl::nullopt;
+    }
+
     absl::optional<std::string> getActiveEndpointId() const {
         if (!_parsedVideoParts.empty()) {
             return _parsedVideoParts[0]->endpointId();
@@ -959,6 +966,10 @@ absl::optional<std::string> VideoStreamingPart::getActiveEndpointId() const {
     return _state
         ? _state->getActiveEndpointId()
         : absl::nullopt;
+}
+
+absl::optional<double> VideoStreamingPart::nextFramePts() const {
+    return _state ? _state->nextFramePts() : absl::nullopt;
 }
 
 bool VideoStreamingPart::hasRemainingFrames() const {

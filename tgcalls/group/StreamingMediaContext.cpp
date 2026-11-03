@@ -15,6 +15,10 @@
 #include "modules/audio_processing/audio_buffer.h"
 #include "api/video/video_sink_interface.h"
 #include "audio/utility/audio_frame_operations.h"
+#include "CallSystemPolicy.h"
+#ifdef __APPLE__
+#include "platform/darwin/TGCallsRuntimeOptions.h"
+#endif
 
 namespace tgcalls {
 
@@ -265,12 +269,29 @@ public:
 
             strong->render();
 
-            strong->beginRenderTimer((int)(1.0 * 1000.0 / 120.0));
+            strong->beginRenderTimer(strong->_nextRenderDelayMs);
         }, webrtc::TimeDelta::Millis(timeoutMs));
     }
 
     void render() {
         int64_t absoluteTimestamp = rtc::TimeMillis();
+
+        bool hasVideo = false;
+        double secondsToNextFrame = -1.0;
+        const auto noteNextFrame = [&](absl::optional<double> nextPts, double relativeTimestamp) {
+            hasVideo = true;
+            if (nextPts) {
+                const double remaining = std::max(0.0, nextPts.value() - relativeTimestamp);
+                if (secondsToNextFrame < 0.0 || remaining < secondsToNextFrame) {
+                    secondsToNextFrame = remaining;
+                }
+            }
+        };
+        const bool isVideoSuspended = isLivestreamVideoSuspended();
+        if (isVideoSuspended != _wasVideoSuspended) {
+            _wasVideoSuspended = isVideoSuspended;
+            RTC_LOG(LS_INFO) << "Livestream video decoding " << (isVideoSuspended ? "suspended (window hidden)" : "resumed");
+        }
 
         while (true) {
             if (_waitForBufferredMillisecondsBeforeRendering) {
@@ -301,6 +322,9 @@ public:
             for (auto &videoSegment : segment->video) {
                 videoSegment->isPlaying = true;
                 cancelPendingVideoQualityUpdate(videoSegment);
+                if (isVideoSuspended) {
+                    continue;
+                }
                 
                 std::shared_ptr<VideoStreamingSharedState> sharedVideoState;
                 auto endpointId = videoSegment->part->getActiveEndpointId();
@@ -315,6 +339,7 @@ public:
                 }
                 
                 auto frame = videoSegment->part->getFrameAtRelativeTimestamp(sharedVideoState.get(), relativeTimestamp);
+                noteNextFrame(videoSegment->part->nextFramePts(), relativeTimestamp);
                 if (frame) {
                     if (videoSegment->lastFramePts != frame->pts) {
                         videoSegment->lastFramePts = frame->pts;
@@ -335,6 +360,9 @@ public:
 
             for (auto &videoSegment : segment->unified) {
                 videoSegment->isPlaying = true;
+                if (isVideoSuspended) {
+                    continue;
+                }
                 
                 absl::optional<std::string> endpointId = "unified";
                 std::shared_ptr<VideoStreamingSharedState> sharedVideoState;
@@ -349,6 +377,7 @@ public:
                 }
 
                 auto frame = videoSegment->videoPart->getFrameAtRelativeTimestamp(sharedVideoState.get(), relativeTimestamp);
+                noteNextFrame(videoSegment->videoPart->nextFramePts(), relativeTimestamp);
                 if (frame) {
                     if (videoSegment->lastFramePts != frame->pts) {
                         videoSegment->lastFramePts = frame->pts;
@@ -522,12 +551,12 @@ public:
                 if (segment->audio && segment->audio->getRemainingMilliseconds() > 0) {
                     RTC_LOG(LS_INFO) << "render: discarding " << segment->audio->getRemainingMilliseconds() << " ms of audio at the end of a segment";
                 }
-                if (!segment->video.empty()) {
+                if (!segment->video.empty() && !isVideoSuspended) {
                     if (segment->video[0]->part->getActiveEndpointId()) {
                         RTC_LOG(LS_INFO) << "render: discarding video frames at the end of a segment (displayed " << segment->video[0]->_displayedFrames << " frames)";
                     }
                 }
-                if (!segment->unified.empty() && segment->unified[0]->videoPart->hasRemainingFrames()) {
+                if (!segment->unified.empty() && !isVideoSuspended && segment->unified[0]->videoPart->hasRemainingFrames()) {
                     RTC_LOG(LS_INFO) << "render: discarding video frames at the end of a segment (displayed " << segment->unified[0]->_displayedFrames << " frames)";
                 }
 
@@ -548,8 +577,18 @@ public:
             break;
         }
 
+        _nextRenderDelayMs = systempolicy::RenderSchedule::nextDelayMs(hasVideo, secondsToNextFrame);
+
         requestSegmentsIfNeeded();
         checkPendingSegments();
+    }
+
+    static bool isLivestreamVideoSuspended() {
+#ifdef __APPLE__
+        return RuntimeOptions::livestreamVideoSuspended().load();
+#else
+        return false;
+#endif
     }
 
     void processAudioLevel(uint32_t ssrc, std::vector<int16_t> const &samples) {
@@ -1049,6 +1088,8 @@ private:
     const int _segmentBufferDuration = 2000;
 
     int64_t _nextSegmentTimestamp = -1;
+    int _nextRenderDelayMs = systempolicy::RenderSchedule::kFloorMs;
+    bool _wasVideoSuspended = false;
 
     absl::optional<int> _waitForBufferredMillisecondsBeforeRendering;
     std::vector<std::shared_ptr<MediaSegment>> _availableSegments;

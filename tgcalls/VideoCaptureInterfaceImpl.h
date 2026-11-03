@@ -31,9 +31,11 @@ public:
     webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source();
     int getRotation();
     bool isScreenCapture();
+    void reapplyOutgoingLimit();
 
 private:
     void updateAspectRateAdaptation();
+    void adaptToOutgoingLimit(int width, int height);
 
     webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _videoSource;
 	std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentUncroppedSink;
@@ -66,6 +68,9 @@ public:
     void setOnIsActiveUpdated(std::function<void(bool)> onIsActiveUpdated) override;
 
 	ThreadLocalObject<VideoCaptureInterfaceObject> *object();
+
+    // Re-reads the local outgoing camera cap (Apple runtime option) on every live capture object.
+    static void reapplyOutgoingLimits();
 
 private:
 	ThreadLocalObject<VideoCaptureInterfaceObject> _impl;

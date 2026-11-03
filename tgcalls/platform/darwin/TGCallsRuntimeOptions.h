@@ -26,6 +26,26 @@ struct RuntimeOptions {
         return value;
     }
 
+    static std::atomic<bool> &threadQoS() {
+        static std::atomic<bool> value{false};
+        return value;
+    }
+
+    static std::atomic<bool> &livestreamVideoSuspended() {
+        static std::atomic<bool> value{false};
+        return value;
+    }
+
+    static std::atomic<int> &outgoingCameraMaxShortSide() {
+        static std::atomic<int> value{0};
+        return value;
+    }
+
+    static std::atomic<int> &outgoingCameraMaxFps() {
+        static std::atomic<int> value{0};
+        return value;
+    }
+
     static std::atomic<bool> &screencastHardwareEncoder() {
         static std::atomic<bool> value{false};
         return value;

@@ -58,6 +58,7 @@
 #include "AudioDeviceHelper.h"
 #include "FakeAudioDeviceModule.h"
 #include "StreamingMediaContext.h"
+#include "CallSystemPolicy.h"
 #include "StreamingAudioRenderer.h"
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
@@ -1657,7 +1658,6 @@ public:
             createOutgoingAudioChannel();
         }*/
 
-        beginNetworkStatusTimer(0);
         beginLogTimer(0);
         //beginAudioChannelCleanupTimer(0);
 
@@ -1676,7 +1676,7 @@ public:
 
             strong->writeStateLogRecords();
 
-            strong->beginLogTimer(1000);
+            strong->beginLogTimer(systempolicy::kStatsIntervalMs);
             
             //strong->generateVideoKeyframe();
         }, webrtc::TimeDelta::Millis(delayMs));
@@ -2299,7 +2299,7 @@ public:
         }, webrtc::TimeDelta::Millis(delayMs));
     }
 
-    void beginNetworkStatusTimer(int delayMs) {
+    void scheduleBroadcastNetworkStatusUpdate() {
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
         _threads->getMediaThread()->PostDelayedTask([weak]() {
             auto strong = weak.lock();
@@ -2310,9 +2310,7 @@ public:
             if (strong->_connectionMode == GroupConnectionMode::GroupConnectionModeBroadcast || strong->_broadcastEnabledUntilRtcIsConnectedAtTimestamp) {
                 strong->updateBroadcastNetworkStatus();
             }
-
-            strong->beginNetworkStatusTimer(500);
-        }, webrtc::TimeDelta::Millis(delayMs));
+        }, webrtc::TimeDelta::Millis(systempolicy::kBroadcastConnectedDelayMs));
     }
 
     void updateBroadcastNetworkStatus() {
@@ -2932,6 +2930,7 @@ public:
             }
             case GroupConnectionMode::GroupConnectionModeBroadcast: {
                 _isBroadcastConnected = false;
+                scheduleBroadcastNetworkStatusUpdate();
 
                 if (!_streamingContext) {
                     StreamingMediaContext::StreamingMediaContextArguments arguments;
