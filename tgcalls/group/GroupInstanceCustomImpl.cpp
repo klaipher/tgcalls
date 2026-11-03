@@ -13,6 +13,7 @@
 #include "GroupNetworkManager.h"
 #include "group/GroupFrameTransformer.h"
 #include "group/GroupAudioCapturePostProcessor.h"
+#include "CallAudioPolicy.h"
 
 #include "api/audio_codecs/audio_decoder_factory_template.h"
 #include "api/audio_codecs/audio_encoder_factory_template.h"
@@ -1374,7 +1375,19 @@ public:
         }
         generateSsrcs();
 
-        _noiseSuppressionConfiguration = std::make_shared<NoiseSuppressionConfiguration>(descriptor.initialEnableNoiseSuppression);
+        _userNoiseSuppressionEnabled = descriptor.initialEnableNoiseSuppression;
+#if USE_RNNOISE
+        // Without the RNNoise processor there is nothing to trade the APM suppressor for.
+        const bool rnnoiseAvailable = _audioLevelsUpdated && _videoContentType != VideoContentType::Screencast;
+#else
+        const bool rnnoiseAvailable = false;
+#endif
+        _groupNoiseMode = rnnoiseAvailable ? audiopolicy::currentGroupNoiseMode() : audiopolicy::GroupNoiseMode::Both;
+        _micGainMode = audiopolicy::currentMicGainMode();
+        if (_groupNoiseMode != audiopolicy::GroupNoiseMode::Both || _micGainMode != audiopolicy::MicGainMode::Legacy) {
+            RTC_LOG(LS_INFO) << "Group call audio policy: noise mode " << static_cast<int>(_groupNoiseMode) << ", mic gain mode " << static_cast<int>(_micGainMode);
+        }
+        _noiseSuppressionConfiguration = std::make_shared<NoiseSuppressionConfiguration>(audiopolicy::resolveGroupNoise(_groupNoiseMode, _userNoiseSuppressionEnabled, true).rnnoise);
 
         _externalAudioRecorder.reset(new ExternalAudioRecorder(&_externalAudioSamples, &_externalAudioSamplesMutex));
 
@@ -1508,10 +1521,12 @@ public:
                 return;
             }
 
-            bool isDeviceMuteAvailable = false;
-            if (_audioDeviceModule->MicrophoneMuteIsAvailable(&isDeviceMuteAvailable) == 0) {
-                if (isDeviceMuteAvailable) {
-                    _audioDeviceModule->SetMicrophoneMute(isMuted);
+            if (audiopolicy::shouldUseHardwareMicrophoneMute()) {
+                bool isDeviceMuteAvailable = false;
+                if (_audioDeviceModule->MicrophoneMuteIsAvailable(&isDeviceMuteAvailable) == 0) {
+                    if (isDeviceMuteAvailable) {
+                        _audioDeviceModule->SetMicrophoneMute(isMuted);
+                    }
                 }
             }
         });
@@ -1533,6 +1548,16 @@ public:
 #endif
 #endif
 
+        const auto apmPolicy = audiopolicy::currentApmPolicy(_outgoingAudioBitrateKbit);
+        webrtc::AudioProcessing::Config apmConfig;
+        audiopolicy::applyApmPolicy(apmConfig, apmPolicy);
+        if (apmPolicy.changesConfig()) {
+            RTC_LOG(LS_INFO) << "Group call audio processing policy: digital AGC2 " << (apmPolicy.micGain == audiopolicy::MicGainMode::DigitalAgc2) << ", internal rate " << apmConfig.pipeline.maximum_internal_processing_rate;
+        }
+        if (audiopolicy::RuntimeAudioOptions::opusComplexity().load() != 0) {
+            RTC_LOG(LS_INFO) << "Group call Opus encoder complexity " << audiopolicy::clampOpusComplexity(audiopolicy::RuntimeAudioOptions::opusComplexity().load());
+        }
+
         webrtc::PeerConnectionFactoryDependencies peerConnectionFactoryDeps;
         peerConnectionFactoryDeps.signaling_thread = _threads->getMediaThread();
         peerConnectionFactoryDeps.worker_thread = _threads->getWorkerThread();
@@ -1540,7 +1565,7 @@ public:
         peerConnectionFactoryDeps.task_queue_factory = webrtc::CreateDefaultTaskQueueFactory();
         peerConnectionFactoryDeps.network_monitor_factory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
 
-        peerConnectionFactoryDeps.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus, webrtc::AudioEncoderL16>();
+        peerConnectionFactoryDeps.audio_encoder_factory = audiopolicy::wrapOpusEncoderFactory(webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus, webrtc::AudioEncoderL16>(), audiopolicy::RuntimeAudioOptions::opusComplexity().load());
         peerConnectionFactoryDeps.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus, webrtc::AudioDecoderL16>();
 
         peerConnectionFactoryDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(false, _videoContentType == VideoContentType::Screencast);
@@ -1552,10 +1577,17 @@ public:
             builder.SetCapturePostProcessing(std::move(audioProcessor));
 
             builder.SetEchoDetector(rtc::make_ref_counted<CustomEchoDetector>());
+            if (apmPolicy.changesConfig()) {
+                builder.SetConfig(apmConfig);
+            }
 
             peerConnectionFactoryDeps.audio_processing = builder.Create();
         }
 #endif
+        if (!peerConnectionFactoryDeps.audio_processing && apmPolicy.changesConfig() && _videoContentType != VideoContentType::Screencast) {
+            // Otherwise the engine builds its own default processing module, without the policy.
+            peerConnectionFactoryDeps.audio_processing = webrtc::AudioProcessingBuilder().SetConfig(apmConfig).Create();
+        }
 
         peerConnectionFactoryDeps.adm = _audioDeviceModule;
 
@@ -1954,7 +1986,10 @@ public:
             //audioOptions.residual_echo_detector = false;
         } else {
             audioOptions.echo_cancellation = true;
-            audioOptions.noise_suppression = true;
+            audioOptions.noise_suppression = audiopolicy::resolveGroupNoise(_groupNoiseMode, _userNoiseSuppressionEnabled, true).apmNoiseSuppression;
+            if (!audiopolicy::analogAgcEnabled(_micGainMode)) {
+                audioOptions.auto_gain_control = false;
+            }
             //audioOptions.residual_echo_detector = true;
         }
 
@@ -3213,7 +3248,7 @@ public:
             _threads->getWorkerThread()->BlockingCall([this]() {
                 _outgoingAudioChannel->send_channel()->SetAudioSend(_outgoingAudioSsrc, !_isMuted, nullptr, &_audioSource);
 
-                if (_audioDeviceModule) {
+                if (_audioDeviceModule && audiopolicy::shouldUseHardwareMicrophoneMute()) {
                     bool isDeviceMuteAvailable = false;
                     if (_audioDeviceModule->MicrophoneMuteIsAvailable(&isDeviceMuteAvailable) == 0) {
                         if (isDeviceMuteAvailable) {
@@ -3226,7 +3261,7 @@ public:
             _outgoingAudioChannel->Enable(!_isMuted);
         } else {
             _threads->getWorkerThread()->BlockingCall([this]() {
-                if (_audioDeviceModule) {
+                if (_audioDeviceModule && audiopolicy::shouldUseHardwareMicrophoneMute()) {
                     bool isDeviceMuteAvailable = false;
                     if (_audioDeviceModule->MicrophoneMuteIsAvailable(&isDeviceMuteAvailable) == 0) {
                         if (isDeviceMuteAvailable) {
@@ -3240,7 +3275,8 @@ public:
     }
 
     void setIsNoiseSuppressionEnabled(bool isNoiseSuppressionEnabled) {
-        _noiseSuppressionConfiguration->isEnabled = isNoiseSuppressionEnabled;
+        _userNoiseSuppressionEnabled = isNoiseSuppressionEnabled;
+        _noiseSuppressionConfiguration->isEnabled = audiopolicy::resolveGroupNoise(_groupNoiseMode, isNoiseSuppressionEnabled, true).rnnoise;
     }
 
     void addOutgoingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
@@ -3724,6 +3760,9 @@ private:
 
     bool _isMuted = true;
     std::shared_ptr<NoiseSuppressionConfiguration> _noiseSuppressionConfiguration;
+    bool _userNoiseSuppressionEnabled = false;
+    audiopolicy::GroupNoiseMode _groupNoiseMode = audiopolicy::GroupNoiseMode::Both;
+    audiopolicy::MicGainMode _micGainMode = audiopolicy::MicGainMode::Legacy;
 
     MissingSsrcPacketBuffer _missingPacketBuffer;
     std::map<uint32_t, ChannelSsrcInfo> _channelBySsrc;

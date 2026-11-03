@@ -1,4 +1,5 @@
 #include "v2/InstanceV2Impl.h"
+#include "CallAudioPolicy.h"
 
 #include "LogSinkImpl.h"
 #include "VideoCaptureInterfaceImpl.h"
@@ -142,6 +143,9 @@ public:
         } else {
             audioOptions.echo_cancellation = true;
             audioOptions.noise_suppression = true;
+            if (!audiopolicy::analogAgcEnabled(audiopolicy::currentMicGainMode())) {
+                audioOptions.auto_gain_control = false;
+            }
         }
 
         const auto contentId = std::to_string(_ssrc);
@@ -1117,7 +1121,7 @@ public:
         peerConnectionFactoryDependencies.network_thread = _threads->getNetworkThread();
         peerConnectionFactoryDependencies.network_monitor_factory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
 
-        peerConnectionFactoryDependencies.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus, webrtc::AudioEncoderL16>();
+        peerConnectionFactoryDependencies.audio_encoder_factory = audiopolicy::wrapOpusEncoderFactory(webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus, webrtc::AudioEncoderL16>(), audiopolicy::RuntimeAudioOptions::opusComplexity().load());
         peerConnectionFactoryDependencies.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus, webrtc::AudioDecoderL16>();
 
         peerConnectionFactoryDependencies.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(true);
@@ -1126,6 +1130,17 @@ public:
         peerConnectionFactoryDependencies.adm = _audioDeviceModule;
 
         webrtc::AudioProcessingBuilder builder;
+        // 1:1 Opus sends at its 32 kbps default.
+        const auto apmPolicy = audiopolicy::currentApmPolicy(32);
+        if (apmPolicy.changesConfig()) {
+            webrtc::AudioProcessing::Config apmConfig;
+            audiopolicy::applyApmPolicy(apmConfig, apmPolicy);
+            builder.SetConfig(apmConfig);
+            RTC_LOG(LS_INFO) << "Call audio processing policy: digital AGC2 " << (apmPolicy.micGain == audiopolicy::MicGainMode::DigitalAgc2) << ", internal rate " << apmConfig.pipeline.maximum_internal_processing_rate;
+        }
+        if (audiopolicy::RuntimeAudioOptions::opusComplexity().load() != 0) {
+            RTC_LOG(LS_INFO) << "Call Opus encoder complexity " << audiopolicy::clampOpusComplexity(audiopolicy::RuntimeAudioOptions::opusComplexity().load());
+        }
         peerConnectionFactoryDependencies.audio_processing = builder.Create();
 
         _availableVideoFormats = peerConnectionFactoryDependencies.video_encoder_factory->GetSupportedFormats();
