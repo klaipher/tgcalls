@@ -5,7 +5,9 @@
 #include "api/video/i420_buffer.h"
 
 #include "AVIOContextImpl.h"
+extern "C" {
 #include <libavutil/pixdesc.h>
+}
 #include "platform/PlatformInterface.h"
 #include "VideoDecodeFallback.h"
 
