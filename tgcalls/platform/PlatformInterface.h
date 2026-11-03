@@ -344,6 +344,16 @@ public:
     }
     virtual void setupVideoDecoding(AVCodecContext *codecContext) {
     }
+    // Hardware decoding of livestream video (FFmpeg hwaccel). The default is "no": a platform
+    // that has one opts in by overriding both. setupHardwareVideoDecoding returns false, leaving
+    // the context untouched, when the hardware path cannot be set up; the caller then decodes
+    // in software.
+    virtual bool supportsHardwareVideoDecoding() {
+        return false;
+    }
+    virtual bool setupHardwareVideoDecoding(AVCodecContext *codecContext) {
+        return false;
+    }
     virtual webrtc::scoped_refptr<webrtc::VideoFrameBuffer> createPlatformFrameFromData(AVFrame const *frame) {
         return nullptr;
     }

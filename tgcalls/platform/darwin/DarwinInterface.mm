@@ -137,6 +137,14 @@ void DarwinInterface::setupVideoDecoding(AVCodecContext *codecContext) {
     return setupDarwinVideoDecoding(codecContext);
 }
 
+bool DarwinInterface::supportsHardwareVideoDecoding() {
+    return darwinSupportsHardwareVideoDecoding();
+}
+
+bool DarwinInterface::setupHardwareVideoDecoding(AVCodecContext *codecContext) {
+    return setupDarwinHardwareVideoDecoding(codecContext);
+}
+
 webrtc::scoped_refptr<webrtc::VideoFrameBuffer> DarwinInterface::createPlatformFrameFromData(AVFrame const *frame) {
     return createDarwinPlatformFrameFromData(frame);
 }

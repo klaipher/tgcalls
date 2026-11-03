@@ -2,6 +2,7 @@
 
 #include "AudioStreamingPart.h"
 #include "VideoStreamingPart.h"
+#include "LivestreamDecodePolicy.h"
 
 #include "absl/types/optional.h"
 #include "rtc_base/thread.h"
@@ -1026,6 +1027,36 @@ public:
                     }
                 }
             }
+        }
+
+        pruneSharedVideoStates();
+    }
+
+    // Drops the decoder state of endpoints that are neither shown nor in a queued segment, which
+    // also frees their hardware decode session.
+    void pruneSharedVideoStates() {
+        std::set<std::string> existing;
+        for (const auto &it : _sharedVideoStateByEndpointId) {
+            existing.insert(it.first);
+        }
+        std::set<std::string> active;
+        for (const auto &videoChannel : _activeVideoChannels) {
+            active.insert(videoChannel.endpoint);
+        }
+        std::set<std::string> queued;
+        for (const auto &segment : _availableSegments) {
+            for (const auto &video : segment->video) {
+                auto endpointId = video->part->getActiveEndpointId();
+                if (endpointId.has_value()) {
+                    queued.insert(endpointId.value());
+                }
+            }
+            if (!segment->unified.empty()) {
+                queued.insert("unified");
+            }
+        }
+        for (const auto &endpointId : endpointsToPrune(existing, active, queued)) {
+            _sharedVideoStateByEndpointId.erase(endpointId);
         }
     }
 

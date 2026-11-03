@@ -32,6 +32,8 @@ public:
 	std::unique_ptr<VideoCapturerInterface> makeVideoCapturer(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::shared_ptr<PlatformContext> platformContext, std::pair<int, int> &outResolution) override;
     virtual webrtc::scoped_refptr<WrappedAudioDeviceModule> wrapAudioDeviceModule(webrtc::scoped_refptr<webrtc::AudioDeviceModule> module) override;
     virtual void setupVideoDecoding(AVCodecContext *codecContext) override;
+    virtual bool supportsHardwareVideoDecoding() override;
+    virtual bool setupHardwareVideoDecoding(AVCodecContext *codecContext) override;
     virtual webrtc::scoped_refptr<webrtc::VideoFrameBuffer> createPlatformFrameFromData(AVFrame const *frame) override;
 };
 

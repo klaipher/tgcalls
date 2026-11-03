@@ -5,6 +5,7 @@
 #include "api/video/i420_buffer.h"
 
 #include "AVIOContextImpl.h"
+#include "LivestreamDecodePolicy.h"
 #include "platform/PlatformInterface.h"
 
 #include <string>
@@ -321,11 +322,38 @@ bool areCodecParametersEqual(AVCodecParameters const &lhs, AVCodecParameters con
     return true;
 }
 
+LivestreamDecodeStreamInfo describeStream(AVCodecParameters const *codecParameters) {
+    LivestreamDecodeStreamInfo info;
+    switch (codecParameters->codec_id) {
+        case AV_CODEC_ID_H264:
+            info.codec = LivestreamDecodeCodec::H264;
+            break;
+        case AV_CODEC_ID_HEVC:
+            info.codec = LivestreamDecodeCodec::Hevc;
+            break;
+        default:
+            info.codec = LivestreamDecodeCodec::Other;
+            break;
+    }
+    if (codecParameters->format == AV_PIX_FMT_YUV420P || codecParameters->format == AV_PIX_FMT_YUVJ420P) {
+        info.pixelFormat = LivestreamDecodePixelFormat::Yuv420P8;
+    }
+    info.width = codecParameters->width;
+    info.height = codecParameters->height;
+    info.progressive = codecParameters->field_order == AV_FIELD_PROGRESSIVE || codecParameters->field_order == AV_FIELD_UNKNOWN;
+    return info;
+}
+
 class VideoStreamingDecoderState {
 public:
+    // With `hardware` set, tries a VideoToolbox-backed decoder first and falls back to software
+    // if it cannot be set up or opened. `lease` is the hardware session slot the caller took;
+    // the decoder keeps it only if it really ends up hardware-backed.
     static std::unique_ptr<VideoStreamingDecoderState> create(
         AVCodecParameters const *codecParameters,
-        AVRational pktTimebase
+        AVRational pktTimebase,
+        bool hardware,
+        HardwareDecodeSessionLease &&lease
     ) {
         AVCodec const *codec = nullptr;
         if (!codec) {
@@ -334,6 +362,28 @@ public:
         if (!codec) {
             return nullptr;
         }
+
+        if (hardware) {
+            if (auto state = createContext(codec, codecParameters, pktTimebase, true, std::move(lease))) {
+                return state;
+            }
+            RTC_LOG(LS_WARNING) << "livestream decode: hardware decoder could not be opened, using software";
+        }
+        return createContext(codec, codecParameters, pktTimebase, false, HardwareDecodeSessionLease());
+    }
+
+    bool isHardware() const {
+        return _lease.isValid();
+    }
+
+private:
+    static std::unique_ptr<VideoStreamingDecoderState> createContext(
+        AVCodec const *codec,
+        AVCodecParameters const *codecParameters,
+        AVRational pktTimebase,
+        bool hardware,
+        HardwareDecodeSessionLease &&lease
+    ) {
         AVCodecContext *codecContext = avcodec_alloc_context3(codec);
         int ret = avcodec_parameters_to_context(codecContext, codecParameters);
         if (ret < 0) {
@@ -342,7 +392,14 @@ public:
         } else {
             codecContext->pkt_timebase = pktTimebase;
             
-            PlatformInterface::SharedInstance()->setupVideoDecoding(codecContext);
+            if (hardware) {
+                if (!PlatformInterface::SharedInstance()->setupHardwareVideoDecoding(codecContext)) {
+                    avcodec_free_context(&codecContext);
+                    return nullptr;
+                }
+            } else {
+                PlatformInterface::SharedInstance()->setupVideoDecoding(codecContext);
+            }
             
             ret = avcodec_open2(codecContext, codec, nullptr);
             if (ret < 0) {
@@ -351,13 +408,17 @@ public:
             }
         }
         
-        return std::make_unique<VideoStreamingDecoderState>(
+        auto state = std::make_unique<VideoStreamingDecoderState>(
             codecContext,
             codecParameters,
             pktTimebase
         );
+        if (hardware) {
+            state->_lease = std::move(lease);
+        }
+        return state;
     }
-    
+
 public:
     VideoStreamingDecoderState(
         AVCodecContext *codecContext,
@@ -421,6 +482,8 @@ private:
     AVCodecContext *_codecContext = nullptr;
     AVCodecParameters *_codecParameters = nullptr;
     AVRational _pktTimebase;
+    // Valid while this decoder holds one of the process-wide hardware decode sessions.
+    HardwareDecodeSessionLease _lease;
 };
 
 }
@@ -435,14 +498,49 @@ public:
     
     void updateDecoderState(
         AVCodecParameters const *codecParameters,
-        AVRational pktTimebase
+        AVRational pktTimebase,
+        std::string const &endpointId
     ) {
         if (_decoderState && _decoderState->supportsDecoding(codecParameters, pktTimebase)) {
             return;
         }
         
+        // Release the previous decoder first so its hardware session slot is free for the new one.
         _decoderState.reset();
-        _decoderState = VideoStreamingDecoderState::create(codecParameters, pktTimebase);
+        
+        auto decision = decideLivestreamDecodeMode(
+            CallsRuntimeSwitches::livestreamHardwareDecoding(),
+            PlatformInterface::SharedInstance()->supportsHardwareVideoDecoding(),
+            describeStream(codecParameters),
+            _health.hardwareFailed(),
+            HardwareDecodeSessionCounter::shared()
+        );
+        bool wantsHardware = decision.mode == LivestreamDecodeMode::Hardware;
+        _decoderState = VideoStreamingDecoderState::create(codecParameters, pktTimebase, wantsHardware, std::move(decision.lease));
+        
+        // One line per decoder so the choice can be compared on a device (Debug Settings switch
+        // "Livestream hardware decoding").
+        if (CallsRuntimeSwitches::livestreamHardwareDecoding()) {
+            bool isHardware = _decoderState && _decoderState->isHardware();
+            RTC_LOG(LS_INFO) << "livestream decode: " << (isHardware ? "hardware" : "software")
+                << " (" << (wantsHardware && !isHardware ? "hardware-setup-failed" : decision.reason) << ")"
+                << " endpoint=" << endpointId
+                << " codec=" << (int)codecParameters->codec_id
+                << " size=" << codecParameters->width << "x" << codecParameters->height
+                << " sessions=" << HardwareDecodeSessionCounter::shared().active();
+        }
+    }
+    
+    // A decode call failed. Returns what the caller should do with the rest of the part. A
+    // hardware failure drops the hardware decoder, so the next part starts a software one.
+    LivestreamDecodeErrorAction onDecodeError() {
+        auto mode = (_decoderState && _decoderState->isHardware()) ? LivestreamDecodeMode::Hardware : LivestreamDecodeMode::Software;
+        auto action = _health.onDecodeError(mode);
+        if (action == LivestreamDecodeErrorAction::FallBackToSoftware) {
+            RTC_LOG(LS_WARNING) << "livestream decode: hardware decoding failed, this stream continues in software from the next part";
+            _decoderState.reset();
+        }
+        return action;
     }
     
     int sendFrame(std::shared_ptr<DecodableFrame> frame) {
@@ -468,6 +566,7 @@ public:
     
 private:
     std::unique_ptr<VideoStreamingDecoderState> _decoderState;
+    LivestreamDecodeHealth _health;
 };
 
 VideoStreamingSharedState::VideoStreamingSharedState() {
@@ -615,6 +714,9 @@ public:
                 .build();
 
             return VideoStreamingPartFrame(_endpointId, videoFrame, _frame.pts(_videoStream, _firstFramePts), _frameIndex);
+        } else if (_frame.frame()->format == AV_PIX_FMT_VIDEOTOOLBOX) {
+            // A hardware frame without a pixel buffer has no I420 planes to copy.
+            return absl::nullopt;
         } else {
             webrtc::scoped_refptr<webrtc::I420Buffer> i420Buffer = webrtc::I420Buffer::Copy(
                 _frame.frame()->width,
@@ -647,7 +749,7 @@ public:
             return {};
         }
         
-        sharedState->impl()->updateDecoderState(_videoCodecParameters, _videoStream->time_base);
+        sharedState->impl()->updateDecoderState(_videoCodecParameters, _videoStream->time_base, _endpointId);
 
         while (true) {
             if (_didReadToEnd) {
@@ -674,11 +776,15 @@ public:
                             // more data needed
                         } else {
                             RTC_LOG(LS_ERROR) << "avcodec_receive_frame failed with result: " << receiveStatus;
+                            // EndPart is today's behaviour; a hardware failure also switches
+                            // this stream to software for the parts that follow.
+                            sharedState->impl()->onDecodeError();
                             _didReadToEnd = true;
                             break;
                         }
                     } else {
                         RTC_LOG(LS_ERROR) << "avcodec_send_packet failed with result: " << sendStatus;
+                        sharedState->impl()->onDecodeError();
                         _didReadToEnd = true;
                         return {};
                     }
