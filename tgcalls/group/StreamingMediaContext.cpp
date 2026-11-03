@@ -1,4 +1,5 @@
 #include "StreamingMediaContext.h"
+#include "StreamRenderPolicy.h"
 
 #include "AudioStreamingPart.h"
 #include "VideoStreamingPart.h"
@@ -266,8 +267,28 @@ public:
 
             strong->render();
 
-            strong->beginRenderTimer((int)(1.0 * 1000.0 / 120.0));
+            // The next tick follows what is playing instead of a fixed 120 Hz for the whole stream.
+            strong->beginRenderTimer(streamRenderDelayMs(strong->currentRenderActivity(), kStreamAudioRingCapacityMs));
         }, webrtc::TimeDelta::Millis(timeoutMs));
+    }
+
+    StreamRenderActivity currentRenderActivity() {
+        if (_availableSegments.empty()) {
+            return StreamRenderActivity::Idle;
+        }
+        const auto &segment = _availableSegments[0];
+        bool videoPlaying = false;
+        for (const auto &videoSegment : segment->video) {
+            const auto endpointId = videoSegment->part->getActiveEndpointId();
+            if (endpointId.has_value() && shouldDecodeStreamVideo(liveStreamSinkCount(_videoSinks, endpointId.value()))) {
+                videoPlaying = true;
+            }
+        }
+        if (!segment->unified.empty() && shouldDecodeStreamVideo(liveStreamSinkCount(_videoSinks, "unified"))) {
+            videoPlaying = true;
+        }
+        const bool audioPlaying = segment->audio || segment->unifiedAudio;
+        return streamRenderActivity(audioPlaying, videoPlaying);
     }
 
     void render() {
@@ -305,6 +326,10 @@ public:
                 
                 std::shared_ptr<VideoStreamingSharedState> sharedVideoState;
                 auto endpointId = videoSegment->part->getActiveEndpointId();
+                // Nobody shows this endpoint: do not decode it. Its next part starts on a keyframe.
+                if (endpointId.has_value() && !shouldDecodeStreamVideo(liveStreamSinkCount(_videoSinks, endpointId.value()))) {
+                    continue;
+                }
                 if (endpointId.has_value()) {
                     auto it = _sharedVideoStateByEndpointId.find(endpointId.value());
                     if (it != _sharedVideoStateByEndpointId.end()) {
@@ -347,6 +372,10 @@ public:
                         sharedVideoState = std::make_shared<VideoStreamingSharedState>();
                         _sharedVideoStateByEndpointId.insert(std::make_pair(endpointId.value(), sharedVideoState));
                     }
+                }
+
+                if (!shouldDecodeStreamVideo(liveStreamSinkCount(_videoSinks, "unified"))) {
+                    continue;
                 }
 
                 auto frame = videoSegment->videoPart->getFrameAtRelativeTimestamp(sharedVideoState.get(), relativeTimestamp);
@@ -1029,6 +1058,7 @@ public:
             }
         }
 
+        pruneExpiredStreamSinks(_videoSinks);
         pruneSharedVideoStates();
     }
 
@@ -1061,6 +1091,7 @@ public:
     }
 
     void addVideoSink(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        pruneExpiredStreamSinks(_videoSinks);
         auto it = _videoSinks.find(endpointId);
         if (it == _videoSinks.end()) {
             _videoSinks.insert(std::make_pair(endpointId, std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>>()));

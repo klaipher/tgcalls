@@ -42,6 +42,8 @@ let package = Package(
                       "tgcalls/group/LivestreamDecodePolicyTest.cpp",
                       "tgcalls/VideoPlaneLayoutTest.cpp",
                       "tgcalls/AudioCallPolicyTest.cpp",
+                      "tgcalls/BoundedHistoryPolicyTest.cpp",
+                      "tgcalls/group/StreamRenderPolicyTest.cpp",
                       "tgcalls/platform/darwin/CaptureFramePolicyTest.cpp",
                       "tgcalls/platform/darwin/EncoderModePolicyTest.cpp",
                       "tgcalls/legacy/InstanceImplLegacy.h",

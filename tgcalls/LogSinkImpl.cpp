@@ -11,7 +11,8 @@
 
 namespace tgcalls {
 
-LogSinkImpl::LogSinkImpl(const FilePath &logPath) {
+LogSinkImpl::LogSinkImpl(const FilePath &logPath, size_t maxBytes) :
+_maxBytes(maxBytes) {
 	if (!logPath.data.empty()) {
 		_file.open(logPath.data);
 	} else {
@@ -59,9 +60,14 @@ void LogSinkImpl::OnLogMessage(const std::string &message) {
 	int32_t milliseconds = curTime.tv_usec / 1000;
 #endif
 
-	if (!_discards) {
+	if (!_discards && !_truncated) {
 		auto &stream = _file.is_open() ? (std::ostream&)_file : _data;
-		stream
+		// 24 bytes for the timestamp prefix.
+		_writtenBytes += message.size() + 24;
+		if (_writtenBytes > _maxBytes) {
+			_truncated = true;
+			stream << "log truncated: size limit reached\n";
+		} else stream
 			<< (timeinfo.tm_year + 1900)
 			<< "-" << (timeinfo.tm_mon + 1)
 			<< "-" << (timeinfo.tm_mday)

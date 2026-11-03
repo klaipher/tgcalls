@@ -74,7 +74,49 @@ static void debugLogThresholdFollowsBuild() {
 #endif
 }
 
+static std::string readFile(const char *path) {
+    std::ifstream file(path);
+    std::stringstream contents;
+    contents << file.rdbuf();
+    return contents.str();
+}
+
+static void fileLogStopsAtItsSizeCap() {
+    const char *directory = std::getenv("TMPDIR");
+    std::string pattern = std::string(directory ? directory : "/tmp") + "/tgcalls-log-cap-XXXXXX";
+    std::vector<char> name(pattern.begin(), pattern.end());
+    name.push_back(0);
+    close(mkstemp(name.data()));
+    FilePath path;
+    path.data = name.data();
+    {
+        LogSinkImpl sink(path, 4096);
+        for (int i = 0; i < 10000; i++) {
+            sink.OnLogMessage("a log line that is long enough to fill the cap quickly", rtc::LS_INFO);
+        }
+        sink.OnLogMessage("never written", rtc::LS_INFO);
+        expect(sink.result().size() == 0, "a capped file log still keeps nothing in memory");
+    }
+    const auto contents = readFile(name.data());
+    expect(contents.size() < 4096 + 512, "a file log does not grow past its cap by more than one line and a marker");
+    expect(contents.find("log truncated") != std::string::npos, "a capped file log says it was truncated");
+    expect(contents.find("never written") == std::string::npos, "lines after the cap are dropped");
+    unlink(name.data());
+}
+
+static void memoryLogStopsAtItsSizeCap() {
+    FilePath path;
+    path.data = "/nonexistent-directory-for-tgcalls-test/log.txt";
+    LogSinkImpl sink(path, 4096);
+    for (int i = 0; i < 10000; i++) {
+        sink.OnLogMessage("a log line that is long enough to fill the cap quickly", rtc::LS_INFO);
+    }
+    expect(sink.result().size() < 4096 + 512, "the in-memory log is capped too");
+}
+
 int main() {
+    fileLogStopsAtItsSizeCap();
+    memoryLogStopsAtItsSizeCap();
     emptyPathKeepsNothing();
     filePathWritesLines();
     unopenablePathKeepsLines();

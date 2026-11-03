@@ -1,0 +1,101 @@
+#include "group/StreamRenderPolicy.h"
+
+#include <cstdio>
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace {
+
+int g_failures = 0;
+
+#define CHECK_TRUE(cond)                                                  \
+    do {                                                                  \
+        if (!(cond)) {                                                    \
+            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);   \
+            g_failures++;                                                 \
+        }                                                                 \
+    } while (0)
+
+using namespace tgcalls;
+
+// The render timer used to repost itself every 8 ms forever. The delay now depends on what the
+// tick has to serve.
+void TestVideoTicksAtOneDisplayRefreshAtMost() {
+    const int delay = streamRenderDelayMs(StreamRenderActivity::Video, kStreamAudioRingCapacityMs);
+    CHECK_TRUE(delay >= 16 && delay <= 17);
+}
+
+void TestAudioOnlyTicksSlowerThanVideo() {
+    const int audio = streamRenderDelayMs(StreamRenderActivity::AudioOnly, kStreamAudioRingCapacityMs);
+    const int video = streamRenderDelayMs(StreamRenderActivity::Video, kStreamAudioRingCapacityMs);
+    CHECK_TRUE(audio > video);
+}
+
+// The audio ring buffer holds 400 ms. No tick delay may let a full ring drain below half before
+// the next refill.
+void TestTickNeverLetsTheAudioRingDrainBelowHalf() {
+    const StreamRenderActivity all[] = {StreamRenderActivity::Idle, StreamRenderActivity::AudioOnly, StreamRenderActivity::Video};
+    for (auto activity : all) {
+        for (int capacity : {400, 200, 100, 40}) {
+            const int delay = streamRenderDelayMs(activity, capacity);
+            CHECK_TRUE(delay <= capacity / 2);
+            CHECK_TRUE(delay >= 1);
+        }
+    }
+}
+
+void TestIdleStillPollsForNewSegments() {
+    const int delay = streamRenderDelayMs(StreamRenderActivity::Idle, kStreamAudioRingCapacityMs);
+    CHECK_TRUE(delay > 0 && delay <= 50);
+}
+
+void TestActivityFollowsWhatPlays() {
+    CHECK_TRUE(streamRenderActivity(false, false) == StreamRenderActivity::Idle);
+    CHECK_TRUE(streamRenderActivity(true, false) == StreamRenderActivity::AudioOnly);
+    CHECK_TRUE(streamRenderActivity(false, true) == StreamRenderActivity::Video);
+    CHECK_TRUE(streamRenderActivity(true, true) == StreamRenderActivity::Video);
+}
+
+struct Sink {};
+
+void TestSinkListsDropExpiredSinksAndCountLiveOnes() {
+    std::map<std::string, std::vector<std::weak_ptr<Sink>>> sinks;
+    auto a = std::make_shared<Sink>();
+    {
+        auto b = std::make_shared<Sink>();
+        sinks["x"] = {a, b};
+        CHECK_TRUE(liveStreamSinkCount(sinks, "x") == 2);
+    }
+    CHECK_TRUE(liveStreamSinkCount(sinks, "x") == 1);
+    CHECK_TRUE(liveStreamSinkCount(sinks, "missing") == 0);
+    pruneExpiredStreamSinks(sinks);
+    CHECK_TRUE(sinks["x"].size() == 1);
+    a.reset();
+    pruneExpiredStreamSinks(sinks);
+    CHECK_TRUE(sinks.find("x") == sinks.end());
+}
+
+// Frames are decoded only for a stream somebody shows.
+void TestDecodeOnlyWhenWatched() {
+    CHECK_TRUE(shouldDecodeStreamVideo(1));
+    CHECK_TRUE(shouldDecodeStreamVideo(3));
+    CHECK_TRUE(!shouldDecodeStreamVideo(0));
+}
+
+} // namespace
+
+int main() {
+    TestVideoTicksAtOneDisplayRefreshAtMost();
+    TestAudioOnlyTicksSlowerThanVideo();
+    TestTickNeverLetsTheAudioRingDrainBelowHalf();
+    TestIdleStillPollsForNewSegments();
+    TestActivityFollowsWhatPlays();
+    TestSinkListsDropExpiredSinksAndCountLiveOnes();
+    TestDecodeOnlyWhenWatched();
+    if (g_failures == 0) {
+        std::printf("ok\n");
+    }
+    return g_failures == 0 ? 0 : 1;
+}

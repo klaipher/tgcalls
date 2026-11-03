@@ -1,3 +1,4 @@
+#include "BoundedHistory.h"
 #include "v2/InstanceV2ReferenceImpl.h"
 
 #include "LogSinkImpl.h"
@@ -1097,7 +1098,8 @@ public:
                 NetworkBitrateLogRecord networkBitrateLogRecord;
                 networkBitrateLogRecord.bitrate = (int32_t)sendBitrateKbps;
 
-                strong->_networkBitrateLogRecords.emplace_back(rtc::TimeMillis(), std::move(networkBitrateLogRecord));
+                // One record a second for the whole call is kept for the debug log; keep the last hour.
+                appendBounded(strong->_networkBitrateLogRecords, StateLogRecord<NetworkBitrateLogRecord>(rtc::TimeMillis(), std::move(networkBitrateLogRecord)), 3600);
             });
         });
     }
