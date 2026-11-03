@@ -2284,11 +2284,7 @@ InstanceV2Impl::InstanceV2Impl(Descriptor &&descriptor) {
     if (descriptor.config.logPath.data.size() != 0) {
         _logSink = std::make_unique<LogSinkImpl>(descriptor.config.logPath);
     }
-#ifdef DEBUG
-    rtc::LogMessage::LogToDebug(rtc::LS_VERBOSE);
-#else
-    rtc::LogMessage::LogToDebug(rtc::LS_INFO);
-#endif
+    configureDebugLogging(rtc::LS_VERBOSE);
     rtc::LogMessage::SetLogToStderr(false);
     if (_logSink) {
         rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);

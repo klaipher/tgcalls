@@ -1992,7 +1992,7 @@ InstanceV2CompatImpl::InstanceV2CompatImpl(Descriptor &&descriptor) {
     if (descriptor.config.logPath.data.size() != 0) {
         _logSink = std::make_unique<LogSinkImpl>(descriptor.config.logPath);
     }
-    rtc::LogMessage::LogToDebug(rtc::LS_INFO);
+    configureDebugLogging(rtc::LS_INFO);
     rtc::LogMessage::SetLogToStderr(false);
     if (_logSink) {
         rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);

@@ -27,7 +27,7 @@ rtc::Thread *getManagerThread() {
 
 InstanceImpl::InstanceImpl(Descriptor &&descriptor)
 : _logSink(std::make_unique<LogSinkImpl>(descriptor.config.logPath)) {
-    rtc::LogMessage::LogToDebug(rtc::LS_INFO);
+    configureDebugLogging(rtc::LS_INFO);
     rtc::LogMessage::SetLogToStderr(false);
 	rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
 

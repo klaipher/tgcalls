@@ -2643,7 +2643,7 @@ GroupInstanceReferenceImpl::GroupInstanceReferenceImpl(GroupInstanceDescriptor &
 #else
     rtc::LogMessage::SetLogToStderr(descriptor.config.need_log);
 #endif
-    rtc::LogMessage::LogToDebug(rtc::LS_INFO);
+    configureDebugLogging(rtc::LS_INFO);
     if (_logSink) {
         rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
     }
