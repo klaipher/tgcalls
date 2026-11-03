@@ -74,7 +74,52 @@ public:
         flag(KeepSessionMode).store(value, std::memory_order_relaxed);
     }
 
+    // Engine threads (network, media, worker) run at user-initiated quality of service. Read when
+    // the threads are created, so a change applies from the next app launch. Default off.
+    static bool threadQoS() {
+        return flag(ThreadQoS).load(std::memory_order_relaxed);
+    }
+    static void setThreadQoS(bool value) {
+        flag(ThreadQoS).store(value, std::memory_order_relaxed);
+    }
+
+    // The app's thermal level (0 nominal ... 3 critical) lowers the size and frame rate of the
+    // outgoing video through the local output-format request. Default off.
+    static bool thermalVideoLadder() {
+        return flag(ThermalVideoLadder).load(std::memory_order_relaxed);
+    }
+    static void setThermalVideoLadder(bool value) {
+        flag(ThermalVideoLadder).store(value, std::memory_order_relaxed);
+    }
+    static int thermalLevel() {
+        return thermalLevelValue().load(std::memory_order_relaxed);
+    }
+    static void setThermalLevel(int value) {
+        thermalLevelValue().store(value, std::memory_order_relaxed);
+    }
+
+    // Incoming 1:1 video frames are dropped before they reach the app while it is in the background
+    // without Picture in Picture. Default off.
+    static bool backgroundVideoDrop() {
+        return flag(BackgroundVideoDrop).load(std::memory_order_relaxed);
+    }
+    static void setBackgroundVideoDrop(bool value) {
+        flag(BackgroundVideoDrop).store(value, std::memory_order_relaxed);
+    }
+    // Runtime state set by the app (see shouldDropRemoteVideo); only read while the switch is on.
+    static bool incomingVideoDropped() {
+        return flag(IncomingVideoDropped).load(std::memory_order_relaxed);
+    }
+    static void setIncomingVideoDropped(bool value) {
+        flag(IncomingVideoDropped).store(value, std::memory_order_relaxed);
+    }
+
 private:
+    static std::atomic<int> &thermalLevelValue() {
+        static std::atomic<int> value{0};
+        return value;
+    }
+
     // Every flag is false at process start; the ones that default to "on" are stored inverted.
     enum Flag {
         LivestreamHardwareDecoding,
@@ -84,6 +129,10 @@ private:
         AdvancedDuckingDisabled,
         OpusFirstLossFloorDisabled,
         KeepSessionMode,
+        ThreadQoS,
+        ThermalVideoLadder,
+        BackgroundVideoDrop,
+        IncomingVideoDropped,
         FlagCount
     };
 

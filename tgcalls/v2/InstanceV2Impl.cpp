@@ -1195,26 +1195,11 @@ public:
 
         adjustBitratePreferences(true);
 
-        beginQualityTimer(0);
         beginLogTimer(0);
 
         InstanceNetworking::State initialNetworkState;
         initialNetworkState.isReadyToSendData = false;
         onNetworkStateUpdated(initialNetworkState);
-    }
-
-    void beginQualityTimer(int delayMs) {
-        const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
-        _threads->getMediaThread()->PostDelayedTask([weak]() {
-            auto strong = weak.lock();
-            if (!strong) {
-                return;
-            }
-
-
-
-            strong->beginQualityTimer(500);
-        }, webrtc::TimeDelta::Millis(delayMs));
     }
 
     void beginLogTimer(int delayMs) {

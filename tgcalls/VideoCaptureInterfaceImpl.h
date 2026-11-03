@@ -22,6 +22,7 @@ public:
     void withNativeImplementation(std::function<void(void *)> completion);
 	void setState(VideoState state);
     void setPreferredAspectRatio(float aspectRatio);
+    void setThermalLevel(int level);
 	void setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 	void setStateUpdated(std::function<void(VideoState)> stateUpdated);
     void setRotationUpdated(std::function<void(int)> rotationUpdated);
@@ -47,6 +48,8 @@ private:
     std::function<void(int)> _rotationUpdated;
 	VideoState _state = VideoState::Active;
     float _preferredAspectRatio = 0.0f;
+    int _thermalLevel = 0;
+    void applyOutputFormat(int width, int height);
     bool _shouldBeAdaptedToReceiverAspectRate = true;
     bool _isScreenCapture = false;
 };
@@ -60,6 +63,7 @@ public:
     void withNativeImplementation(std::function<void(void *)> completion) override;
 	void setState(VideoState state) override;
     void setPreferredAspectRatio(float aspectRatio) override;
+    void setThermalLevel(int level) override;
 	void setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
     void setOnFatalError(std::function<void()> error) override;
     void setOnPause(std::function<void(bool)> pause) override;

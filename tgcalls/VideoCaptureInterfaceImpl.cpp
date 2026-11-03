@@ -1,4 +1,6 @@
 #include "VideoCaptureInterfaceImpl.h"
+#include "CallPowerPolicy.h"
+#include "CallsRuntimeSwitches.h"
 
 #include "VideoCapturerInterface.h"
 #include "Manager.h"
@@ -105,6 +107,23 @@ void VideoCaptureInterfaceObject::setState(VideoState state) {
 	}
 }
 
+// With the thermal ladder off this is the request the code always made: the given size at 25 fps.
+void VideoCaptureInterfaceObject::applyOutputFormat(int width, int height) {
+    const auto format = videoLadderFormat(_thermalLevel, width, height, CallsRuntimeSwitches::thermalVideoLadder() && !_isScreenCapture);
+    PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, format.width, format.height, format.fps);
+}
+
+void VideoCaptureInterfaceObject::setThermalLevel(int level) {
+    if (_thermalLevel == level) {
+        return;
+    }
+    _thermalLevel = level;
+    if (CallsRuntimeSwitches::thermalVideoLadder()) {
+        RTC_LOG(LS_INFO) << "video: thermal level " << level << ", output format request updated";
+        updateAspectRateAdaptation();
+    }
+}
+
 void VideoCaptureInterfaceObject::setPreferredAspectRatio(float aspectRatio) {
     _preferredAspectRatio = aspectRatio;
     updateAspectRateAdaptation();
@@ -126,9 +145,9 @@ void VideoCaptureInterfaceObject::updateAspectRateAdaptation() {
                     ? originalHeight
                     : int(std::round(originalHeight / aspectRatio));
 
-                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, (int)width, (int)height, 25);
+                applyOutputFormat((int)width, (int)height);
             } else {
-                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, _videoCapturerResolution.first, _videoCapturerResolution.second, 25);
+                applyOutputFormat(_videoCapturerResolution.first, _videoCapturerResolution.second);
             }
         }
     }
@@ -190,6 +209,12 @@ void VideoCaptureInterfaceImpl::setState(VideoState state) {
 	_impl.perform([state](VideoCaptureInterfaceObject *impl) {
 		impl->setState(state);
 	});
+}
+
+void VideoCaptureInterfaceImpl::setThermalLevel(int level) {
+    _impl.perform([level](VideoCaptureInterfaceObject *impl) {
+        impl->setThermalLevel(level);
+    });
 }
 
 void VideoCaptureInterfaceImpl::setPreferredAspectRatio(float aspectRatio) {

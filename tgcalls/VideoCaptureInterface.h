@@ -42,6 +42,9 @@ public:
 	virtual void switchToDevice(std::string deviceId, bool isScreenCapture) = 0;
 	virtual void setState(VideoState state) = 0;
     virtual void setPreferredAspectRatio(float aspectRatio) = 0;
+	// 0 nominal ... 3 critical; the platform may lower the size and frame rate it feeds the encoder.
+	virtual void setThermalLevel(int level) {
+	}
 	virtual void setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
     virtual void setOnFatalError(std::function<void()> error) {
       // TODO: make this function pure virtual when everybody implements it.

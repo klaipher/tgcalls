@@ -3,7 +3,15 @@
 #include "rtc_base/thread.h"
 #include "call/call.h"
 
+#include "CallPowerPolicy.h"
+#include "CallsRuntimeSwitches.h"
+
 #include <mutex>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#include <pthread.h>
+#include <pthread/qos.h>
+#endif
 #include <algorithm>
 
 namespace tgcalls {
@@ -63,6 +71,9 @@ public:
     media_ = create("tgc-media" + suffix);
     worker_ = create("tgc-work" + suffix);
     network_ = create_network("tgc-net" + suffix);
+    applyQos(media_.get(), EngineThreadRole::Media);
+    applyQos(worker_.get(), EngineThreadRole::Worker);
+    applyQos(network_.get(), EngineThreadRole::Network);
       
     media_->AllowInvokesToThread(worker_.get());
     media_->AllowInvokesToThread(network_.get());
@@ -93,6 +104,21 @@ private:
   }
   static Thread create_network(const std::string &name) {
     return init(std::unique_ptr<rtc::Thread>(rtc::Thread::CreateWithSocketServer()), name);
+  }
+
+  // Debug Settings switch "Calls: thread quality of service"; read when the threads are created.
+  static void applyQos(rtc::Thread *thread, EngineThreadRole role) {
+#if TARGET_OS_IOS
+    if (engineThreadQos(role, CallsRuntimeSwitches::threadQoS()) != EngineThreadQos::UserInitiated) {
+      return;
+    }
+    thread->PostTask([]() {
+      pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+    });
+#else
+    (void)thread;
+    (void)role;
+#endif
   }
 
   static Thread init(Thread value, const std::string &name) {

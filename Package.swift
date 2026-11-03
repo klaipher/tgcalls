@@ -43,6 +43,7 @@ let package = Package(
                       "tgcalls/VideoPlaneLayoutTest.cpp",
                       "tgcalls/AudioCallPolicyTest.cpp",
                       "tgcalls/BoundedHistoryPolicyTest.cpp",
+                      "tgcalls/CallPowerPolicyTest.cpp",
                       "tgcalls/group/StreamRenderPolicyTest.cpp",
                       "tgcalls/platform/darwin/CaptureFramePolicyTest.cpp",
                       "tgcalls/platform/darwin/EncoderModePolicyTest.cpp",
