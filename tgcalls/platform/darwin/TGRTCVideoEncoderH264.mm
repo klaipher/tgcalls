@@ -32,6 +32,9 @@
 
 #include "api/video_codecs/h264_profile_level_id.h"
 
+#include "CallsRuntimeSwitches.h"
+#include "platform/darwin/EncoderModePolicy.h"
+
 #include "common_video/include/bitrate_adjuster.h"
 #include "modules/include/module_common_types.h"
 #include "modules/video_coding/include/video_error_codes.h"
@@ -332,6 +335,11 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
   uint32_t _maxAllowedFrameRate;
   RTCH264PacketizationMode _packetizationMode;
   absl::optional<webrtc::H264ProfileLevelId> _profile_level_id;
+  // iOS low-latency mode (Debug Settings "Calls: low-latency encoder"); both false is the standard
+  // mode this encoder has always used.
+  bool _usesLowLatencyRateControl;
+  bool _usesRealTimeEncoding;
+  bool _lowLatencyConfigurationFailed;
   RTCVideoEncoderCallback _callback;
   int32_t _width;
   int32_t _height;
@@ -641,6 +649,26 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
     pixelFormat = nullptr;
   }
   CFMutableDictionaryRef encoder_specs = nullptr;
+  _usesLowLatencyRateControl = false;
+  _usesRealTimeEncoding = false;
+  _lowLatencyConfigurationFailed = false;
+#if defined(WEBRTC_IOS)
+  // The key exists since iOS 14.5. Every failure below falls back to the standard session.
+  bool lowLatencySupported = false;
+  if (@available(iOS 14.5, *)) {
+    lowLatencySupported = true;
+  }
+  tgcalls::EncoderMode encoderMode = tgcalls::chooseEncoderMode(tgcalls::CallsRuntimeSwitches::encoderLowLatency(), lowLatencySupported);
+  if (encoderMode.lowLatency) {
+    if (@available(iOS 14.5, *)) {
+      encoder_specs = CFDictionaryCreateMutable(
+          nullptr, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+      CFDictionarySetValue(encoder_specs,
+                           kVTVideoEncoderSpecification_EnableLowLatencyRateControl,
+                           kCFBooleanTrue);
+    }
+  }
+#endif
 #if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
   // Currently hw accl is supported above 360p on mac, below 360p
   // the compression session will be created with hw accl disabled.
@@ -661,6 +689,24 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
                                  compressionOutputCallback,
                                  nullptr,
                                  &_compressionSession);
+#if defined(WEBRTC_IOS)
+  if (encoder_specs && encoderMode.lowLatency) {
+    if (status == noErr) {
+      _usesLowLatencyRateControl = true;
+      _usesRealTimeEncoding = encoderMode.realTime;
+    } else {
+      // A device or profile that cannot do low-latency rate control gets today's session.
+      RTC_LOG(LS_WARNING) << "H264 encoder: low-latency rate control could not be created (" << status << "), using the standard mode";
+      tgcalls::EncoderLowLatencyLatch::markFailed();
+      CFDictionaryRemoveValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl);
+      status = VTCompressionSessionCreate(nullptr, _width, _height, kCMVideoCodecType_H264, nullptr, sourceAttributes, nullptr, compressionOutputCallback, nullptr, &_compressionSession);
+    }
+  }
+  if (tgcalls::CallsRuntimeSwitches::encoderLowLatency()) {
+    RTC_LOG(LS_INFO) << "H264 encoder: " << (_usesLowLatencyRateControl ? "low-latency rate control, real-time" : "standard mode")
+        << " (" << (_usesLowLatencyRateControl ? "ok" : encoderMode.reason) << ") " << _width << "x" << _height;
+  }
+#endif
   if (sourceAttributes) {
     CFRelease(sourceAttributes);
     sourceAttributes = nullptr;
@@ -687,6 +733,16 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
 #endif
   [self configureCompressionSession];
 
+#if defined(WEBRTC_IOS)
+  if (_lowLatencyConfigurationFailed) {
+    // The negotiated profile could not be applied in low-latency mode: never send a stream that
+    // differs from what was negotiated. The latch makes the next attempt a standard session.
+    RTC_LOG(LS_WARNING) << "H264 encoder: low-latency session rejected the negotiated profile, rebuilding in the standard mode";
+    tgcalls::EncoderLowLatencyLatch::markFailed();
+    return [self resetCompressionSessionWithPixelFormat:framePixelFormat];
+  }
+#endif
+
   // The pixel buffer pool is dependent on the compression session so if the session is reset, the
   // pool should be reset as well.
   _pixelBufferPool = VTCompressionSessionGetPixelBufferPool(_compressionSession);
@@ -696,10 +752,19 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
 
 - (void)configureCompressionSession {
   RTC_DCHECK(_compressionSession);
-  SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_RealTime, false);
-  SetVTSessionProperty(_compressionSession,
-                       kVTCompressionPropertyKey_ProfileLevel,
-                       ExtractProfile(*_profile_level_id));
+  SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_RealTime, _usesRealTimeEncoding);
+  if (_usesLowLatencyRateControl) {
+    OSStatus profileStatus = VTSessionSetProperty(_compressionSession,
+                                                  kVTCompressionPropertyKey_ProfileLevel,
+                                                  ExtractProfile(*_profile_level_id));
+    if (profileStatus != noErr) {
+      _lowLatencyConfigurationFailed = true;
+    }
+  } else {
+    SetVTSessionProperty(_compressionSession,
+                         kVTCompressionPropertyKey_ProfileLevel,
+                         ExtractProfile(*_profile_level_id));
+  }
   SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_AllowFrameReordering, false);
   [self setEncoderBitrateBps:_targetBitrateBps frameRate:_encoderFrameRate];
   // TODO(tkchin): Look at entropy mode and colorspace matrices.
