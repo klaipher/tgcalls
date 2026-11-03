@@ -25,6 +25,9 @@ let package = Package(
                       "tools",
                       "tgcalls/v2wasm",
                       "tgcalls/v2/MtProtoDtlsTransportTest.cpp",
+                      "tgcalls/v2/MtProtoDtlsTransport.cpp",
+                      "tgcalls/v2/InstanceV2CompatImpl.cpp",
+                      "tgcalls/group/GroupInstanceReferenceImpl.cpp",
                       "README.md",
                       "tgcalls/platform/android",
                       "tgcalls/platform/tdesktop",
@@ -92,6 +95,10 @@ let package = Package(
                 .define("WEBRTC_OPUS_SUPPORT_120MS_PTIME", to: "1", nil),
                 .define("WEBRTC_OPUS_VARIABLE_COMPLEXITY", to: "0", nil),
                 .define("WEBRTC_USE_H264", to: "", nil),
+                // desktop-app tg_owt lacks Telegram iOS WebRTC's TGCALLS SEAM patches (mtproto in the
+                // DTLS slot, un-demuxable RTP for GroupInstanceReferenceImpl); the files above that need
+                // them are excluded and InstanceV2ReferenceImpl keeps DTLS-SRTP.
+                .define("TGCALLS_WEBRTC_WITHOUT_TELEGRAM_SEAMS", to: "1", nil),
 
             ]),
     ],
