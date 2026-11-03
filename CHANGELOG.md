@@ -7,6 +7,8 @@ moved under their date when the app repositories pin them.
 
 ## Unreleased
 
+- Telegram for macOS 13.2's broadcast playback through the Mac call audio device (Telegram's `38dcea1`, the tgcalls commit telegram-macos ec221d85 pins): `macos/Sources/BroadcastMedia/*` (the livestream part reader and video decoder the Mac's `GroupCallBroadcast*` player uses) and `OngoingCallThreadLocalContext.mm`'s `broadcastAudioCore`; in shared code `GroupInstanceDescriptor.onPlayoutFrame`, an optional playout callback, empty by default, so iOS is unchanged. Cherry-picked with `-x`.
+
 Sync with Telegram 13.2 (tgcalls c1de0882 on development, not public). Source of each change: the public `dev/android` cherry-picks of Telegram's own commits where they exist (`git cherry-pick -x`), a re-implementation where not.
 
 - Every SCTP-signaling engine (11.0.0, 14.0.0, 18/19, as 12/13 before) reads `network_sctp_t1_init_ms` / `_t1_cookie_ms` / `_max_backoff_ms` through `SignalingSctpConnection::Options::fromCustomParameters`; each connection logs its values (af52b5d, picked from dev/android 12ab3b3 = development 8d5e7e0)

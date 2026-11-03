@@ -58,6 +58,7 @@ let package = Package(
                 .headerSearchPath("."),
                 .headerSearchPath("tgcalls"),
                 .headerSearchPath("macos/PublicHeaders"),
+                .headerSearchPath("macos/Sources/BroadcastAudio"),
                 .headerSearchPath("SharedHeaders/webrtc"),
                 .headerSearchPath("SharedHeaders/webrtc/third_party/abseil-cpp"),
                 .headerSearchPath("SharedHeaders/webrtc/sdk/objc"),
