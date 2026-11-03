@@ -27,6 +27,7 @@
 #import "base/RTCVideoFrameBuffer.h"
 #import "components/video_frame_buffer/RTCCVPixelBuffer.h"
 #import "helpers.h"
+#import "TGRTCScreenVideoRange.h"
 
 #include "common_video/h264/h264_bitstream_parser.h"
 
@@ -66,7 +67,9 @@ const float kLimitToAverageBitRateFactor = 1.5f;
 const int kLowH264QpThreshold = 28;
 const int kHighH264QpThreshold = 39;
 
-const OSType kNV12PixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+static OSType NV12PixelFormat() {
+  return TGRTCI420CopyPixelFormat();
+}
 
 // Struct that we pass to the encoder per frame to encode. We receive it again
 // in the encoder callback.
@@ -100,7 +103,7 @@ struct RTCFrameEncodeParams {
 // TODO(tkchin): See if encoder will accept i420 frames and compare performance.
 static bool CopyVideoFrameToNV12PixelBuffer(id<RTCI420Buffer> frameBuffer, CVPixelBufferRef pixelBuffer) {
   RTC_DCHECK(pixelBuffer);
-  RTC_DCHECK_EQ(CVPixelBufferGetPixelFormatType(pixelBuffer), kNV12PixelFormat);
+  RTC_DCHECK_EQ(CVPixelBufferGetPixelFormatType(pixelBuffer), NV12PixelFormat());
   RTC_DCHECK_EQ(CVPixelBufferGetHeightOfPlane(pixelBuffer, 0), frameBuffer.height);
   RTC_DCHECK_EQ(CVPixelBufferGetWidthOfPlane(pixelBuffer, 0), frameBuffer.width);
 
@@ -346,6 +349,7 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
 
   webrtc::H264BitstreamParser _h264BitstreamParser;
   std::vector<uint8_t> _frameScaleBuffer;
+  CFStringRef _sessionColorMatrix;
 }
 
 // .5 is set as a mininum to prevent overcompensating for large temporary
@@ -400,7 +404,7 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
   // TODO(tkchin): Try setting payload size via
   // kVTCompressionPropertyKey_MaxH264SliceBytes.
 
-  return [self resetCompressionSessionWithPixelFormat:kNV12PixelFormat];
+  return [self resetCompressionSessionWithPixelFormat:NV12PixelFormat()];
 }
 
 - (NSInteger)encode:(RTCVideoFrame *)frame
@@ -449,6 +453,7 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
         CVBufferRelease(pixelBuffer);
         return WEBRTC_VIDEO_CODEC_ERROR;
       }
+      CVBufferPropagateAttachments(rtcPixelBuffer.pixelBuffer, pixelBuffer);
     }
   }
 
@@ -464,6 +469,11 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
       CVBufferRelease(pixelBuffer);
       return WEBRTC_VIDEO_CODEC_ERROR;
     }
+    TGRTCTagLimitedRangeBT601(pixelBuffer);
+  }
+
+  if (TGRTCUpdateSessionColorMatrix(_compressionSession, pixelBuffer, &_sessionColorMatrix)) {
+    isKeyframeRequired = YES;
   }
 
   // Check if we need a keyframe.
@@ -577,7 +587,7 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
     return CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
   }
 
-  return kNV12PixelFormat;
+  return NV12PixelFormat();
 }
 
 - (BOOL)resetCompressionSessionIfNeededWithFrame:(RTCVideoFrame *)frame {
@@ -740,6 +750,10 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
     CFRelease(_compressionSession);
     _compressionSession = nullptr;
     _pixelBufferPool = nullptr;
+  }
+  if (_sessionColorMatrix) {
+    CFRelease(_sessionColorMatrix);
+    _sessionColorMatrix = nullptr;
   }
 }
 

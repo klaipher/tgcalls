@@ -16,7 +16,7 @@ SCStreamConfiguration *TGScreenCaptureStreamConfiguration(CGSize outputSize, dou
     SCStreamConfiguration *configuration = [[SCStreamConfiguration alloc] init];
     configuration.width = (size_t)outputSize.width;
     configuration.height = (size_t)outputSize.height;
-    configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+    configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
     configuration.colorMatrix = kCGDisplayStreamYCbCrMatrix_ITU_R_601_4;
     configuration.colorSpaceName = kCGColorSpaceSRGB;
     configuration.minimumFrameInterval = CMTimeMake(1, (int32_t)MAX(1.0, std::round(fps)));
@@ -37,4 +37,13 @@ BOOL TGScreenCaptureSampleBufferIsComplete(CMSampleBufferRef sampleBuffer) {
     NSDictionary *info = (__bridge NSDictionary *)CFArrayGetValueAtIndex(attachments, 0);
     NSNumber *status = info[SCStreamFrameInfoStatus];
     return status != nil && status.integerValue == SCFrameStatusComplete;
+}
+
+void TGScreenCaptureTagFrame(CVPixelBufferRef pixelBuffer) {
+    CFTypeRef matrix = CVBufferCopyAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, NULL);
+    if (matrix != NULL) {
+        CFRelease(matrix);
+        return;
+    }
+    CVBufferSetAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_601_4, kCVAttachmentMode_ShouldPropagate);
 }

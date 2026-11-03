@@ -190,6 +190,7 @@ static tgcalls::DarwinVideoTrackSource *getScreenCaptureVideoSource(const rtc::s
         return;
     }
     CVPixelBufferRef pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    TGScreenCaptureTagFrame(pixelBuffer);
     int width = (int)CVPixelBufferGetWidth(pixelBuffer);
     int height = (int)CVPixelBufferGetHeight(pixelBuffer);
     TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:width adaptedHeight:height cropWidth:width cropHeight:height cropX:0 cropY:0];

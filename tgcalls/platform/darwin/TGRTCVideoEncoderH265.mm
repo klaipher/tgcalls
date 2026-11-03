@@ -21,6 +21,7 @@
 #import "base/RTCVideoFrameBuffer.h"
 #import "components/video_frame_buffer/RTCCVPixelBuffer.h"
 #import "helpers.h"
+#import "TGRTCScreenVideoRange.h"
 #if defined(WEBRTC_IOS)
 #import "helpers/UIDevice+RTCDevice.h"
 #endif
@@ -99,7 +100,7 @@ bool CopyVideoFrameToPixelBuffer(id<RTCI420Buffer> frameBuffer,
                                  CVPixelBufferRef pixelBuffer) {
   RTC_DCHECK(pixelBuffer);
   RTC_DCHECK_EQ(CVPixelBufferGetPixelFormatType(pixelBuffer),
-                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
+                TGRTCI420CopyPixelFormat());
   RTC_DCHECK_EQ(CVPixelBufferGetHeightOfPlane(pixelBuffer, 0),
                 frameBuffer.height);
   RTC_DCHECK_EQ(CVPixelBufferGetWidthOfPlane(pixelBuffer, 0),
@@ -190,6 +191,11 @@ void compressionOutputCallback(void* encoder,
 
   webrtc::H265BitstreamParser _h265BitstreamParser;
   std::vector<uint8_t> _nv12ScaleBuffer;
+  CFStringRef _sessionColorMatrix;
+  CVPixelBufferPoolRef _copyPool;
+  OSType _copyPoolFormat;
+  int _copyPoolWidth;
+  int _copyPoolHeight;
 }
 
 // .5 is set as a mininum to prevent overcompensating for large temporary
@@ -210,6 +216,37 @@ void compressionOutputCallback(void* encoder,
 
 - (void)dealloc {
   [self destroyCompressionSession];
+  if (_copyPool) {
+    CVPixelBufferPoolRelease(_copyPool);
+    _copyPool = nullptr;
+  }
+}
+
+- (CVPixelBufferRef)createCopyPixelBufferWithFormat:(OSType)format width:(int)width height:(int)height {
+  if (!_copyPool || _copyPoolFormat != format || _copyPoolWidth != width || _copyPoolHeight != height) {
+    if (_copyPool) {
+      CVPixelBufferPoolRelease(_copyPool);
+      _copyPool = nullptr;
+    }
+    NSDictionary *attributes = @{
+      (NSString *)kCVPixelBufferPixelFormatTypeKey: @(format),
+      (NSString *)kCVPixelBufferWidthKey: @(width),
+      (NSString *)kCVPixelBufferHeightKey: @(height),
+      (NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{}
+    };
+    if (CVPixelBufferPoolCreate(kCFAllocatorDefault, nullptr, (__bridge CFDictionaryRef)attributes, &_copyPool) != kCVReturnSuccess) {
+      _copyPool = nullptr;
+      return nullptr;
+    }
+    _copyPoolFormat = format;
+    _copyPoolWidth = width;
+    _copyPoolHeight = height;
+  }
+  CVPixelBufferRef pixelBuffer = nullptr;
+  if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, _copyPool, &pixelBuffer) != kCVReturnSuccess) {
+    return nullptr;
+  }
+  return pixelBuffer;
 }
 
 - (NSInteger)startEncodeWithSettings:(RTCVideoEncoderSettings*)settings
@@ -273,7 +310,7 @@ void compressionOutputCallback(void* encoder,
       CVBufferRetain(pixelBuffer);
     } else {
       // Cropping required, we need to crop and scale to a new pixel buffer.
-      pixelBuffer = CreatePixelBuffer(pixelBufferPool);
+      pixelBuffer = [self createCopyPixelBufferWithFormat:CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer) width:_width height:_height];
       if (!pixelBuffer) {
         return WEBRTC_VIDEO_CODEC_ERROR;
       }
@@ -290,23 +327,31 @@ void compressionOutputCallback(void* encoder,
       _nv12ScaleBuffer.shrink_to_fit();
       if (![rtcPixelBuffer cropAndScaleTo:pixelBuffer
                            withTempBuffer:_nv12ScaleBuffer.data()]) {
+        CVBufferRelease(pixelBuffer);
         return WEBRTC_VIDEO_CODEC_ERROR;
       }
+      CVBufferPropagateAttachments(rtcPixelBuffer.pixelBuffer, pixelBuffer);
     }
   }
 
   if (!pixelBuffer) {
     // We did not have a native frame buffer
-    pixelBuffer = CreatePixelBuffer(pixelBufferPool);
+    id<RTCI420Buffer> i420Buffer = [frame.buffer toI420];
+    pixelBuffer = [self createCopyPixelBufferWithFormat:TGRTCI420CopyPixelFormat() width:i420Buffer.width height:i420Buffer.height];
     if (!pixelBuffer) {
       return WEBRTC_VIDEO_CODEC_ERROR;
     }
     RTC_DCHECK(pixelBuffer);
-    if (!CopyVideoFrameToPixelBuffer([frame.buffer toI420], pixelBuffer)) {
+    if (!CopyVideoFrameToPixelBuffer(i420Buffer, pixelBuffer)) {
       RTC_LOG(LS_ERROR) << "Failed to copy frame data.";
       CVBufferRelease(pixelBuffer);
       return WEBRTC_VIDEO_CODEC_ERROR;
     }
+    TGRTCTagLimitedRangeBT601(pixelBuffer);
+  }
+
+  if (TGRTCUpdateSessionColorMatrix(_compressionSession, pixelBuffer, &_sessionColorMatrix)) {
+    isKeyframeRequired = YES;
   }
 
   // Check if we need a keyframe.
@@ -505,6 +550,10 @@ void compressionOutputCallback(void* encoder,
     VTCompressionSessionInvalidate(_compressionSession);
     CFRelease(_compressionSession);
     _compressionSession = nullptr;
+  }
+  if (_sessionColorMatrix) {
+    CFRelease(_sessionColorMatrix);
+    _sessionColorMatrix = nullptr;
   }
 }
 
