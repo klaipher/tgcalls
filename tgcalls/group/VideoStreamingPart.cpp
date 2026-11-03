@@ -5,7 +5,9 @@
 #include "api/video/i420_buffer.h"
 
 #include "AVIOContextImpl.h"
+#include <libavutil/pixdesc.h>
 #include "platform/PlatformInterface.h"
+#include "VideoDecodeFallback.h"
 
 #include <string>
 #include <set>
@@ -325,7 +327,8 @@ class VideoStreamingDecoderState {
 public:
     static std::unique_ptr<VideoStreamingDecoderState> create(
         AVCodecParameters const *codecParameters,
-        AVRational pktTimebase
+        AVRational pktTimebase,
+        bool allowHardware
     ) {
         AVCodec const *codec = nullptr;
         if (!codec) {
@@ -342,12 +345,23 @@ public:
         } else {
             codecContext->pkt_timebase = pktTimebase;
             
-            PlatformInterface::SharedInstance()->setupVideoDecoding(codecContext);
+            if (allowHardware) {
+                PlatformInterface::SharedInstance()->setupVideoDecoding(codecContext);
+            }
+            bool usesHardware = codecContext->hw_device_ctx != nullptr;
             
             ret = avcodec_open2(codecContext, codec, nullptr);
+            if (ret < 0 && usesHardware) {
+                RTC_LOG(LS_WARNING) << "Livestream hardware decoder failed to open (" << ret << "), using software";
+                avcodec_free_context(&codecContext);
+                return create(codecParameters, pktTimebase, false);
+            }
             if (ret < 0) {
                 avcodec_free_context(&codecContext);
                 return nullptr;
+            }
+            if (usesHardware) {
+                RTC_LOG(LS_INFO) << "Livestream decoder uses hardware: " << codecContext->width << "x" << codecContext->height;
             }
         }
         
@@ -417,6 +431,10 @@ public:
         avcodec_flush_buffers(_codecContext);
     }
     
+    bool usesHardware() const {
+        return _codecContext && _codecContext->hw_device_ctx != nullptr;
+    }
+    
 private:
     AVCodecContext *_codecContext = nullptr;
     AVCodecParameters *_codecParameters = nullptr;
@@ -442,21 +460,43 @@ public:
         }
         
         _decoderState.reset();
-        _decoderState = VideoStreamingDecoderState::create(codecParameters, pktTimebase);
+        _decoderState = VideoStreamingDecoderState::create(codecParameters, pktTimebase, !_fallback.isSoftwareOnly());
     }
     
     int sendFrame(std::shared_ptr<DecodableFrame> frame) {
         if (!_decoderState) {
             return AVERROR(EIO);
         }
-        return _decoderState->sendFrame(frame);
+        int status = _decoderState->sendFrame(frame);
+        if (status < 0 && status != AVERROR(EAGAIN) && status != AVERROR_EOF) {
+            noteHardwareFailure(VideoDecodeStage::Send, status);
+        }
+        return status;
     }
     
     int receiveFrame(Frame &frame) {
         if (!_decoderState) {
             return AVERROR(EIO);
         }
-        return _decoderState->receiveFrame(frame);
+        int status = _decoderState->receiveFrame(frame);
+        if (status < 0 && status != AVERROR(EAGAIN) && status != AVERROR_EOF) {
+            noteHardwareFailure(VideoDecodeStage::Receive, status);
+        }
+        return status;
+    }
+    
+    void noteHardwareFailure(VideoDecodeStage stage, int status) {
+        if (!_decoderState || !_decoderState->usesHardware()) {
+            return;
+        }
+        if (_fallback.noteHardwareFailure(stage)) {
+            RTC_LOG(LS_WARNING) << "Livestream hardware decoding failed at stage " << (int)stage << " with " << status << ", falling back to software from the next part";
+        }
+        _decoderState.reset();
+    }
+    
+    bool usesHardware() const {
+        return _decoderState && _decoderState->usesHardware();
     }
     
     void reset() {
@@ -468,6 +508,7 @@ public:
     
 private:
     std::unique_ptr<VideoStreamingDecoderState> _decoderState;
+    VideoDecodeFallback _fallback;
 };
 
 VideoStreamingSharedState::VideoStreamingSharedState() {
@@ -616,6 +657,11 @@ public:
 
             return VideoStreamingPartFrame(_endpointId, videoFrame, _frame.pts(_videoStream, _firstFramePts), _frameIndex);
         } else {
+            AVPixFmtDescriptor const *descriptor = av_pix_fmt_desc_get((AVPixelFormat)_frame.frame()->format);
+            if (descriptor && (descriptor->flags & AV_PIX_FMT_FLAG_HWACCEL)) {
+                _hardwareFrameRejected = true;
+                return absl::nullopt;
+            }
             webrtc::scoped_refptr<webrtc::I420Buffer> i420Buffer = webrtc::I420Buffer::Copy(
                 _frame.frame()->width,
                 _frame.frame()->height,
@@ -669,6 +715,10 @@ public:
                             if (convertedFrame) {
                                 _frameIndex++;
                                 return convertedFrame;
+                            } else if (_hardwareFrameRejected) {
+                                sharedState->impl()->noteHardwareFailure(VideoDecodeStage::FrameConversion, 0);
+                                _didReadToEnd = true;
+                                break;
                             }
                         } else if (receiveStatus == AVERROR(EAGAIN)) {
                             // more data needed
@@ -693,6 +743,9 @@ public:
                                 if (convertedFrame) {
                                     _frameIndex++;
                                     _finalFrames.push_back(convertedFrame.value());
+                                } else if (_hardwareFrameRejected) {
+                                    sharedState->impl()->noteHardwareFailure(VideoDecodeStage::FrameConversion, 0);
+                                    break;
                                 }
                             } else {
                                 if (receiveStatus != AVERROR_EOF) {
@@ -729,6 +782,7 @@ private:
     int _frameIndex = 0;
     double _firstFramePts = -1.0;
     bool _didReadToEnd = false;
+    bool _hardwareFrameRejected = false;
 };
 
 class VideoStreamingPartState {
