@@ -27,6 +27,7 @@
 #import "base/RTCVideoFrameBuffer.h"
 #import "components/video_frame_buffer/RTCCVPixelBuffer.h"
 #import "helpers.h"
+#import "TGRTCScreenVideoRange.h"
 
 #include "common_video/h264/h264_bitstream_parser.h"
 
@@ -66,7 +67,9 @@ const float kLimitToAverageBitRateFactor = 1.5f;
 const int kLowH264QpThreshold = 28;
 const int kHighH264QpThreshold = 39;
 
-const OSType kNV12PixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+static OSType NV12PixelFormat() {
+  return TGRTCI420CopyPixelFormat();
+}
 
 // Struct that we pass to the encoder per frame to encode. We receive it again
 // in the encoder callback.
@@ -100,7 +103,7 @@ struct RTCFrameEncodeParams {
 // TODO(tkchin): See if encoder will accept i420 frames and compare performance.
 static bool CopyVideoFrameToNV12PixelBuffer(id<RTCI420Buffer> frameBuffer, CVPixelBufferRef pixelBuffer) {
   RTC_DCHECK(pixelBuffer);
-  RTC_DCHECK_EQ(CVPixelBufferGetPixelFormatType(pixelBuffer), kNV12PixelFormat);
+  RTC_DCHECK_EQ(CVPixelBufferGetPixelFormatType(pixelBuffer), NV12PixelFormat());
   RTC_DCHECK_EQ(CVPixelBufferGetHeightOfPlane(pixelBuffer, 0), frameBuffer.height);
   RTC_DCHECK_EQ(CVPixelBufferGetWidthOfPlane(pixelBuffer, 0), frameBuffer.width);
 
@@ -323,6 +326,10 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
 }
 }  // namespace
 
+static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId &profile_level_id) {
+  return profile_level_id.profile == webrtc::H264Profile::kProfileConstrainedHigh || profile_level_id.profile == webrtc::H264Profile::kProfileHigh;
+}
+
 @implementation TGRTCVideoEncoderH264 {
   RTCVideoCodecInfo *_codecInfo;
   std::unique_ptr<webrtc::BitrateAdjuster> _bitrateAdjuster;
@@ -332,6 +339,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
   uint32_t _maxAllowedFrameRate;
   RTCH264PacketizationMode _packetizationMode;
   absl::optional<webrtc::H264ProfileLevelId> _profile_level_id;
+  bool _usesRealTimeEncoding;
   RTCVideoEncoderCallback _callback;
   int32_t _width;
   int32_t _height;
@@ -341,6 +349,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
 
   webrtc::H264BitstreamParser _h264BitstreamParser;
   std::vector<uint8_t> _frameScaleBuffer;
+  CFStringRef _sessionColorMatrix;
 }
 
 // .5 is set as a mininum to prevent overcompensating for large temporary
@@ -395,7 +404,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
   // TODO(tkchin): Try setting payload size via
   // kVTCompressionPropertyKey_MaxH264SliceBytes.
 
-  return [self resetCompressionSessionWithPixelFormat:kNV12PixelFormat];
+  return [self resetCompressionSessionWithPixelFormat:NV12PixelFormat()];
 }
 
 - (NSInteger)encode:(RTCVideoFrame *)frame
@@ -444,6 +453,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
         CVBufferRelease(pixelBuffer);
         return WEBRTC_VIDEO_CODEC_ERROR;
       }
+      CVBufferPropagateAttachments(rtcPixelBuffer.pixelBuffer, pixelBuffer);
     }
   }
 
@@ -459,6 +469,11 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
       CVBufferRelease(pixelBuffer);
       return WEBRTC_VIDEO_CODEC_ERROR;
     }
+    TGRTCTagLimitedRangeBT601(pixelBuffer);
+  }
+
+  if (TGRTCUpdateSessionColorMatrix(_compressionSession, pixelBuffer, &_sessionColorMatrix)) {
+    isKeyframeRequired = YES;
   }
 
   // Check if we need a keyframe.
@@ -572,7 +587,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
     return CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
   }
 
-  return kNV12PixelFormat;
+  return NV12PixelFormat();
 }
 
 - (BOOL)resetCompressionSessionIfNeededWithFrame:(RTCVideoFrame *)frame {
@@ -649,6 +664,10 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
   CFDictionarySetValue(encoder_specs,
                        kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
                        kCFBooleanTrue);
+  bool lowLatencyRateControl = TGRTCH264UsesLowLatencyRateControl(*_profile_level_id);
+  if (lowLatencyRateControl) {
+    CFDictionarySetValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl, kCFBooleanTrue);
+  }
 #endif
   OSStatus status =
       VTCompressionSessionCreate(nullptr,  // use default allocator
@@ -661,6 +680,15 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
                                  compressionOutputCallback,
                                  nullptr,
                                  &_compressionSession);
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
+  if (status != noErr && lowLatencyRateControl) {
+    RTC_LOG(LS_INFO) << "Low-latency rate control is unavailable, retrying without it: " << status;
+    CFDictionaryRemoveValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl);
+    lowLatencyRateControl = false;
+    status = VTCompressionSessionCreate(nullptr, _width, _height, kCMVideoCodecType_H264, encoder_specs, sourceAttributes, nullptr, compressionOutputCallback, nullptr, &_compressionSession);
+  }
+  _usesRealTimeEncoding = true;
+#endif
   if (sourceAttributes) {
     CFRelease(sourceAttributes);
     sourceAttributes = nullptr;
@@ -696,7 +724,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
 
 - (void)configureCompressionSession {
   RTC_DCHECK(_compressionSession);
-  SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_RealTime, false);
+  SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_RealTime, _usesRealTimeEncoding);
   SetVTSessionProperty(_compressionSession,
                        kVTCompressionPropertyKey_ProfileLevel,
                        ExtractProfile(*_profile_level_id));
@@ -722,6 +750,10 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
     CFRelease(_compressionSession);
     _compressionSession = nullptr;
     _pixelBufferPool = nullptr;
+  }
+  if (_sessionColorMatrix) {
+    CFRelease(_sessionColorMatrix);
+    _sessionColorMatrix = nullptr;
   }
 }
 

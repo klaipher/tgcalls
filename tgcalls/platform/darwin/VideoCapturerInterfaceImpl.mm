@@ -26,6 +26,7 @@
 #ifndef WEBRTC_IOS
 #import "VideoCameraCapturerMac.h"
 #import "tgcalls/platform/darwin/DesktopSharingCapturer.h"
+#import "tgcalls/platform/darwin/ScreenCaptureKitCapturer.h"
 #import "tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h"
 #import "CustomExternalCapturer.h"
 #import "VideoCMIOCapture.h"
@@ -223,7 +224,15 @@
         }
 #else
         if (const auto desktopCaptureSource = tgcalls::DesktopCaptureSourceForKey([sourceDescription.deviceId UTF8String])) {
-            DesktopSharingCapturer *sharing = [[DesktopSharingCapturer alloc] initWithSource:source captureSource:desktopCaptureSource];
+            id<CapturerInterface> sharing = nil;
+            if (@available(macOS 14.0, *)) {
+                if ([ScreenCaptureKitCapturer isEnabled]) {
+                    sharing = [[ScreenCaptureKitCapturer alloc] initWithSource:source captureSource:desktopCaptureSource];
+                }
+            }
+            if (sharing == nil) {
+                sharing = [[DesktopSharingCapturer alloc] initWithSource:source captureSource:desktopCaptureSource];
+            }
             _videoCapturer = sharing;
         } else if (!tgcalls::ShouldBeDesktopCapture([sourceDescription.deviceId UTF8String])) {
             id<CapturerInterface> camera;

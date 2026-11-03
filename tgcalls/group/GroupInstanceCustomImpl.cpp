@@ -3771,17 +3771,16 @@ private:
 };
 
 GroupInstanceCustomImpl::GroupInstanceCustomImpl(GroupInstanceDescriptor &&descriptor) {
-    // Without a file the sink keeps every log line in memory and nothing reads it.
     if (descriptor.config.need_log && !descriptor.config.logPath.data.empty()) {
         _logSink = std::make_unique<LogSinkImpl>(descriptor.config.logPath);
     }
-#if defined(NDEBUG) && defined(WEBRTC_IOS)
-    // Nobody reads an iOS app's stderr in release; each line costs a write and an fflush.
-    rtc::LogMessage::SetLogToStderr(false);
-#else
+#if DEBUG
     rtc::LogMessage::SetLogToStderr(descriptor.config.need_log);
-#endif
     rtc::LogMessage::LogToDebug(rtc::LS_INFO);
+#else
+    rtc::LogMessage::SetLogToStderr(false);
+    rtc::LogMessage::LogToDebug(rtc::LS_NONE);
+#endif
     if (_logSink) {
         rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
     }

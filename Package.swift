@@ -29,6 +29,7 @@ let package = Package(
                       "tgcalls/v2/InstanceV2CompatImpl.cpp",
                       "tgcalls/group/GroupInstanceReferenceImpl.cpp",
                       "README.md",
+                      "tests",
                       "tgcalls/platform/android",
                       "tgcalls/platform/tdesktop",
                       "tgcalls/platform/uwp",
@@ -100,6 +101,9 @@ let package = Package(
                 // them are excluded and InstanceV2ReferenceImpl keeps DTLS-SRTP.
                 .define("TGCALLS_WEBRTC_WITHOUT_TELEGRAM_SEAMS", to: "1", nil),
 
+            ],
+            linkerSettings: [
+                .linkedFramework("ScreenCaptureKit"),
             ]),
     ],
     cxxLanguageStandard: .cxx20

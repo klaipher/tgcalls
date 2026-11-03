@@ -23,6 +23,7 @@ public:
 private:
 	std::ofstream _file;
 	std::ostringstream _data;
+	bool _discards = false;
 
 };
 
