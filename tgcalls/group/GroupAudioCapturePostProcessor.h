@@ -18,6 +18,7 @@ struct DenoiseState;
 
 namespace webrtc {
 class AudioBuffer;
+class PushSincResampler;
 } // namespace webrtc
 
 namespace tgcalls {
@@ -40,6 +41,19 @@ public:
 private:
     static const int kLength = 8;
     float _vadResultHistory[kLength];
+};
+
+class PeakSpeechDetector {
+public:
+    bool update(float framePeak);
+
+private:
+    static constexpr float kMinimumSpeechPeak = 1000.0f;
+    static constexpr float kSpeechToFloorRatio = 2.0f;
+    static constexpr float kFloorRisePerFrame = 1.005f;
+
+    bool _hasFloor = false;
+    float _floor = 0.0f;
 };
 
 struct NoiseSuppressionConfiguration {
@@ -66,21 +80,25 @@ public:
 
 private:
     void Initialize(int sample_rate_hz, int num_channels) override;
-    void Process(webrtc::AudioBuffer *originalBuffer) override;
+    void Process(webrtc::AudioBuffer *buffer) override;
     std::string ToString() const override;
     void SetRuntimeSetting(webrtc::AudioProcessing::RuntimeSetting setting) override;
+
+    bool processAtProcessingRate(float *samples);
 
     std::function<void(GroupLevelValue const &)> _updated;
     std::shared_ptr<NoiseSuppressionConfiguration> _noiseSuppressionConfiguration;
 
-    int _currentSampleRate = 0;
-
     DenoiseState *_denoiseState = nullptr;
-    std::unique_ptr<webrtc::AudioBuffer> _resampledBuffer;
+    std::unique_ptr<webrtc::PushSincResampler> _toProcessingRate;
+    std::unique_ptr<webrtc::PushSincResampler> _fromProcessingRate;
+    size_t _resamplerCaptureFrames = 0;
+    std::vector<float> _processingSamples;
     std::vector<float> _frameSamples;
     int32_t _peakCount = 0;
     float _peak = 0;
     VadHistory _history;
+    PeakSpeechDetector _peakSpeechDetector;
 
     std::vector<float> *_externalAudioSamples = nullptr;
     webrtc::Mutex *_externalAudioSamplesMutex = nullptr;
