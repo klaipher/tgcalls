@@ -20,6 +20,8 @@
 #include "pc/video_track_source_proxy.h"
 #include "third_party/libyuv/include/libyuv.h"
 #include "DarwinVideoSource.h"
+#include "TGCameraFormatSelection.h"
+#include "TGCallsRuntimeOptions.h"
 
 struct CameraFrameSize {
     int width = 0;
@@ -210,6 +212,8 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
     std::function<void ()> _onFatalError;
     int _warmupFrameCount;
+    dispatch_queue_t _sessionQueue;
+    std::atomic<int> _droppedFrameCount;
 }
 
 @end
@@ -305,19 +309,15 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     _skippedFrame = 0;
     if (updated) {
         if (_isPaused) {
-//            [RTCDispatcher
-//             dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
-//             block:^{
-                 [self->_captureSession stopRunning];
-                 self->_isRunning = NO;
-//             }];
+            [self performOnSessionQueue:^{
+                [self->_captureSession stopRunning];
+                self->_isRunning = NO;
+            }];
         } else {
-//            [RTCDispatcher
-//             dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
-//             block:^{
-                 [self->_captureSession startRunning];
-                 self->_isRunning = YES;
-//             }];
+            [self performOnSessionQueue:^{
+                [self->_captureSession startRunning];
+                self->_isRunning = YES;
+            }];
         }
     }
 
@@ -361,7 +361,12 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     };
     UInt32 dataSize = 0;
 
-    NSNumber *_connectionID = ((NSNumber *)[device valueForKey:@"_connectionID"]);
+    NSNumber *_connectionID = nil;
+    @try {
+        _connectionID = ((NSNumber *)[device valueForKey:@"_connectionID"]);
+    } @catch (NSException *exception) {
+        RTCLogError(@"Camera connection id is unavailable: %@", exception.reason);
+    }
 
     CMIODeviceID deviceId = (CMIODeviceID)[_connectionID intValue];
 
@@ -406,21 +411,29 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 
 -(void)start {
     _willBeRunning = true;
-//    [RTCDispatcher
-//     dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
-//     block:^{
-         [self->_captureSession startRunning];
-         self->_isRunning = YES;
-//     }];
+    [self performOnSessionQueue:^{
+        [self->_captureSession startRunning];
+        self->_isRunning = YES;
+    }];
+}
+
+- (void)performOnSessionQueue:(dispatch_block_t)block {
+    if (!tgcalls::RuntimeOptions::cameraFormatV2().load()) {
+        block();
+        return;
+    }
+    if (!_sessionQueue) {
+        dispatch_queue_attr_t attributes = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
+        _sessionQueue = dispatch_queue_create("org.telegram.tgcalls.camera-session", attributes);
+    }
+    dispatch_async(_sessionQueue, block);
 }
 
 
 
 - (void)stopCaptureWithCompletionHandler:(nullable void (^)(void))completionHandler {
   _willBeRunning = false;
-//  [RTCDispatcher
-//   dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
-//   block:^{
+  [self performOnSessionQueue:^{
       RTCLogInfo("Stop");
       self->_currentDevice = nil;
       for (AVCaptureDeviceInput *oldInput in [self->_captureSession.inputs copy]) {
@@ -432,7 +445,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
       if (completionHandler) {
           completionHandler();
       }
-//  }];
+  }];
 }
 
 
@@ -509,7 +522,10 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
          fromConnection:(AVCaptureConnection *)connection {
   NSString *droppedReason =
       (__bridge NSString *)CMGetAttachment(sampleBuffer, kCMSampleBufferAttachmentKey_DroppedFrameReason, nil);
-  RTCLogError(@"Dropped sample buffer. Reason: %@", droppedReason);
+  int dropped = ++_droppedFrameCount;
+  if (dropped == 1 || dropped % 100 == 0) {
+    RTCLogError(@"Dropped sample buffers: %d. Last reason: %@", dropped, droppedReason);
+  }
 }
 
 #pragma mark - AVCaptureSession notifications
@@ -677,7 +693,23 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 //             @"updateDeviceCaptureFormat must be called on the capture queue.");
     @try {
         _currentDevice.activeFormat = format;
-        if (format.videoSupportedFrameRateRanges.count > 0) {
+        if (tgcalls::RuntimeOptions::cameraFormatV2().load() && format.videoSupportedFrameRateRanges.count > 0) {
+            std::vector<tgcalls::cameraformat::FrameRateRange> ranges;
+            for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
+                ranges.push_back({ range.minFrameRate, range.maxFrameRate });
+            }
+            auto choice = tgcalls::cameraformat::chooseFrameRate(ranges);
+            AVFrameRateRange *range = format.videoSupportedFrameRateRanges[choice.rangeIndex];
+            CMTime duration = CMTimeMake(1, (int32_t)tgcalls::cameraformat::kTargetFps);
+            if (choice.kind == tgcalls::cameraformat::FrameRateChoice::Kind::SlowestOfRange) {
+                duration = range.maxFrameDuration;
+            } else if (choice.kind == tgcalls::cameraformat::FrameRateChoice::Kind::FastestOfRange) {
+                duration = range.minFrameDuration;
+            }
+            _currentDevice.activeVideoMinFrameDuration = duration;
+            _currentDevice.activeVideoMaxFrameDuration = duration;
+            RTCLogInfo(@"Camera frame duration set to %lld/%d", duration.value, duration.timescale);
+        } else if (format.videoSupportedFrameRateRanges.count > 0) {
             int target = 24;
             int closest = -1;
             CMTime result;
