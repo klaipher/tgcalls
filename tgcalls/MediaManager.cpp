@@ -29,6 +29,8 @@
 #endif
 
 #include "FieldTrialsConfig.h"
+#include "AudioCallPolicy.h"
+#include "CallsRuntimeSwitches.h"
 
 namespace tgcalls {
 namespace {
@@ -360,7 +362,20 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 
         cricket::AudioOptions audioOptions;
         audioOptions.echo_cancellation = true;
-        audioOptions.noise_suppression = true;
+        // Legacy 1:1 calls also run on the system voice-processing unit on iOS.
+        const auto captureProcessing = chooseCaptureProcessing(
+            CallsRuntimeSwitches::systemNoiseSuppression(),
+            kAudioCallPolicyIsIosBuild,
+            true,
+            SystemVoiceProcessingLatch::failed()
+        );
+        audioOptions.noise_suppression = captureProcessing.softwareNoiseSuppression;
+        if (captureProcessing.disableHighpassFilter) {
+            audioOptions.highpass_filter = false;
+        }
+        RTC_LOG(LS_WARNING) << "legacy call audio: software noise suppression "
+            << (captureProcessing.softwareNoiseSuppression ? "on" : "off")
+            << " (" << captureProcessing.reason << ")";
         audioOptions.audio_jitter_buffer_fast_accelerate = true;
 
         std::vector<std::string> streamIds;
@@ -399,7 +414,10 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
         audioSendPrameters.options.echo_cancellation = true;
         audioSendPrameters.options.auto_gain_control = true;
     #endif
-        audioSendPrameters.options.noise_suppression = true;
+        audioSendPrameters.options.noise_suppression = captureProcessing.softwareNoiseSuppression;
+        if (captureProcessing.disableHighpassFilter) {
+            audioSendPrameters.options.highpass_filter = false;
+        }
         audioSendPrameters.rtcp.reduced_size = true;
         audioSendPrameters.rtcp.remote_estimate = true;
         _audioSendChannel->SetSenderParameters(audioSendPrameters);

@@ -70,6 +70,8 @@
 
 #include "GroupJoinPayloadInternal.h"
 #include "FieldTrialsConfig.h"
+#include "AudioCallPolicy.h"
+#include "CallsRuntimeSwitches.h"
 
 #include "third-party/json11.hpp"
 
@@ -1954,7 +1956,22 @@ public:
             //audioOptions.residual_echo_detector = false;
         } else {
             audioOptions.echo_cancellation = true;
-            audioOptions.noise_suppression = true;
+            // A group participant who can speak runs on the system voice-processing unit on iOS;
+            // a listener or stream (no audio input) runs on plain RemoteIO and keeps the software
+            // stage. The switch is off by default.
+            const auto processing = chooseCaptureProcessing(
+                CallsRuntimeSwitches::systemNoiseSuppression(),
+                kAudioCallPolicyIsIosBuild,
+                !_disableAudioInput,
+                SystemVoiceProcessingLatch::failed()
+            );
+            audioOptions.noise_suppression = processing.softwareNoiseSuppression;
+            if (processing.disableHighpassFilter) {
+                audioOptions.highpass_filter = false;
+            }
+            RTC_LOG(LS_WARNING) << "group call audio: software noise suppression "
+                << (processing.softwareNoiseSuppression ? "on" : "off")
+                << " (" << processing.reason << ")";
             //audioOptions.residual_echo_detector = true;
         }
 

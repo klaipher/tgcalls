@@ -134,6 +134,9 @@ class VoiceProcessingAudioUnit {
   // Deletes the underlying audio unit.
   void DisposeAudioUnit();
 
+  // iOS 17+: duck other audio only while speech is active, by the smallest amount. Local.
+  void ConfigureOtherAudioDucking();
+
   const bool bypass_voice_processing_;
   const bool disable_recording_;
   const int numChannels_;

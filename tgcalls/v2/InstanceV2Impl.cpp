@@ -56,6 +56,8 @@
 #include <sstream>
 
 #include "FieldTrialsConfig.h"
+#include "AudioCallPolicy.h"
+#include "CallsRuntimeSwitches.h"
 
 #include "third-party/json11.hpp"
 
@@ -141,7 +143,21 @@ public:
             //audioOptions.residual_echo_detector = false;
         } else {
             audioOptions.echo_cancellation = true;
-            audioOptions.noise_suppression = true;
+            // The 1:1 call always runs on the system voice-processing unit on iOS; when the switch
+            // is on its noise suppression replaces the software one (and the high-pass filter).
+            const auto processing = chooseCaptureProcessing(
+                CallsRuntimeSwitches::systemNoiseSuppression(),
+                kAudioCallPolicyIsIosBuild,
+                true,
+                SystemVoiceProcessingLatch::failed()
+            );
+            audioOptions.noise_suppression = processing.softwareNoiseSuppression;
+            if (processing.disableHighpassFilter) {
+                audioOptions.highpass_filter = false;
+            }
+            RTC_LOG(LS_WARNING) << "call audio: software noise suppression "
+                << (processing.softwareNoiseSuppression ? "on" : "off")
+                << " (" << processing.reason << ")";
         }
 
         const auto contentId = std::to_string(_ssrc);
@@ -928,12 +944,17 @@ public:
     _initialInputDeviceId(std::move(descriptor.initialInputDeviceId)),
     _initialOutputDeviceId(std::move(descriptor.initialOutputDeviceId)),
     _videoCapture(descriptor.videoCapture) {
-        webrtc::field_trial::InitFieldTrialsFromString(
+        // InitFieldTrialsFromString keeps the pointer, so both variants are immutable statics and
+        // the switch only picks one of them.
+        static const std::string kBaseTrials =
             "WebRTC-DataChannel-Dcsctp/Enabled/"
             "WebRTC-Audio-MinimizeResamplingOnMobile/Enabled/"
             "WebRTC-Audio-iOS-Holding/Enabled/"
-            "WebRTC-IceFieldTrials/skip_relay_to_non_relay_connections:true/"
-        );
+            "WebRTC-IceFieldTrials/skip_relay_to_non_relay_connections:true/";
+        static const std::string kTrialsWithOpusFloor = withOpusFirstLossFloor(kBaseTrials, true);
+        const bool opusFloor = CallsRuntimeSwitches::opusFirstLossFloor();
+        RTC_LOG(LS_WARNING) << "call audio: Opus first-loss floor " << (opusFloor ? "on" : "off");
+        webrtc::field_trial::InitFieldTrialsFromString((opusFloor ? kTrialsWithOpusFloor : kBaseTrials).c_str());
         
         if (!descriptor.config.customParameters.empty()) {
             std::string parsingError;

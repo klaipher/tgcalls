@@ -14,6 +14,8 @@
 #include "system_wrappers/include/metrics.h"
 
 #import "base/RTCLogging.h"
+#include "AudioCallPolicy.h"
+#include "CallsRuntimeSwitches.h"
 #import "platform/darwin/iOS/RTCAudioSessionConfiguration.h"
 
 #if !defined(NDEBUG)
@@ -116,6 +118,9 @@ bool VoiceProcessingAudioUnit::Init() {
   if (result != noErr) {
     vpio_unit_ = nullptr;
     RTCLogError(@"AudioComponentInstanceNew failed. Error=%ld.", (long)result);
+    if (!disable_recording_) {
+      tgcalls::SystemVoiceProcessingLatch::markFailed();
+    }
     return false;
   }
 
@@ -282,6 +287,9 @@ bool VoiceProcessingAudioUnit::Initialize(Float64 sample_rate) {
     if (failed_initalize_attempts == kMaxNumberOfAudioUnitInitializeAttempts) {
       // Max number of initialization attempts exceeded, hence abort.
       RTCLogError(@"Too many initialization attempts.");
+      if (!disable_recording_) {
+        tgcalls::SystemVoiceProcessingLatch::markFailed();
+      }
       return false;
     }
     RTCLog(@"Pause 100ms and try audio unit initialization again...");
@@ -293,6 +301,8 @@ bool VoiceProcessingAudioUnit::Initialize(Float64 sample_rate) {
   }
 
   if (bypass_voice_processing_) {
+    // No system DSP in this mode: later calls must keep WebRTC's software noise suppression.
+    tgcalls::SystemVoiceProcessingLatch::markFailed();
     // Attempt to disable builtin voice processing.
     UInt32 toggle = 1;
     result = AudioUnitSetProperty(vpio_unit_,
@@ -369,10 +379,40 @@ bool VoiceProcessingAudioUnit::Initialize(Float64 sample_rate) {
   RTC_HISTOGRAM_BOOLEAN("WebRTC.Audio.BuiltInAGCIsEnabled", agc_is_enabled);
   RTCLog(@"WebRTC.Audio.BuiltInAGCIsEnabled: %u",
          static_cast<unsigned int>(agc_is_enabled));
+
+  ConfigureOtherAudioDucking();
   }
 
   state_ = kInitialized;
   return true;
+}
+
+void VoiceProcessingAudioUnit::ConfigureOtherAudioDucking() {
+  const bool osSupportsAdvancedDucking = ([] {
+    if (@available(iOS 17.0, macOS 14.0, *)) {
+      return true;
+    }
+    return false;
+  })();
+  const auto plan = tgcalls::chooseOtherAudioDucking(tgcalls::CallsRuntimeSwitches::advancedDucking(), osSupportsAdvancedDucking);
+  if (!plan.apply) {
+    RTCLog(@"Other audio ducking: system default (%s)", plan.reason);
+    return;
+  }
+  if (@available(iOS 17.0, macOS 14.0, *)) {
+    // Duck other audio only while speech is active, by the smallest amount. A failure here is
+    // harmless: the unit keeps its default ducking.
+    AUVoiceIOOtherAudioDuckingConfiguration configuration;
+    configuration.mEnableAdvancedDucking = plan.advanced ? true : false;
+    configuration.mDuckingLevel = static_cast<AUVoiceIOOtherAudioDuckingLevel>(static_cast<int>(plan.level));
+    OSStatus result = AudioUnitSetProperty(vpio_unit_, kAUVoiceIOProperty_OtherAudioDuckingConfiguration,
+                                           kAudioUnitScope_Global, kInputBus, &configuration, sizeof(configuration));
+    if (result == noErr) {
+      RTCLog(@"Other audio ducking: advanced, minimum level.");
+    } else {
+      RTCLogError(@"Failed to configure other audio ducking, keeping the default. Error=%ld.", (long)result);
+    }
+  }
 }
 
 OSStatus VoiceProcessingAudioUnit::Start() {
