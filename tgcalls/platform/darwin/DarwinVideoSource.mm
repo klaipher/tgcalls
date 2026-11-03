@@ -136,8 +136,30 @@ bool DarwinVideoTrackSource::OnCapturedFrame(const webrtc::VideoFrame& frame) {
     }
 
     webrtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
+    RTC_OBJC_TYPE(RTCCVPixelBuffer) *nativePixelBuffer = nil;
+    if (frame.video_frame_buffer()->type() == webrtc::VideoFrameBuffer::Type::kNative) {
+        // A camera frame that travels as a pixel buffer (Debug Settings "Calls: native camera
+        // frames"). Anything else native keeps going through the I420 conversion below.
+        id<RTC_OBJC_TYPE(RTCVideoFrameBuffer)> wrapped = static_cast<webrtc::ObjCFrameBuffer *>(frame.video_frame_buffer().get())->wrapped_frame_buffer();
+        if ([wrapped isKindOfClass:[RTC_OBJC_TYPE(RTCCVPixelBuffer) class]]) {
+            nativePixelBuffer = (RTC_OBJC_TYPE(RTCCVPixelBuffer) *)wrapped;
+        }
+    }
     if (adapted_width == frame.width() && adapted_height == frame.height()) {
         buffer = frame.video_frame_buffer();
+    } else if (nativePixelBuffer != nil) {
+        // Adapted CVPixelBuffer frame: the crop and scale are recorded on the buffer and applied
+        // once, by the encoder, into its own pool buffer.
+        @autoreleasepool {
+        buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>([[RTC_OBJC_TYPE(RTCCVPixelBuffer) alloc]
+            initWithPixelBuffer:nativePixelBuffer.pixelBuffer
+                   adaptedWidth:adapted_width
+                  adaptedHeight:adapted_height
+                      cropWidth:crop_width
+                     cropHeight:crop_height
+                          cropX:crop_x + nativePixelBuffer.cropX
+                          cropY:crop_y + nativePixelBuffer.cropY]);
+        }
     } else {
         webrtc::scoped_refptr<webrtc::I420Buffer> i420_buffer = webrtc::I420Buffer::Create(adapted_width, adapted_height);
         buffer = frame.video_frame_buffer();

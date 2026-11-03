@@ -26,6 +26,9 @@
 
 #include "VideoCaptureView.h"
 
+#include "CallsRuntimeSwitches.h"
+#include "platform/darwin/CaptureFramePolicy.h"
+
 namespace {
 
 static const int64_t kNanosecondsPerSecond = 1000000000;
@@ -107,7 +110,10 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     // Live on frameQueue and main thread.
     std::atomic<bool> _isPaused;
 
-    // Live on frameQueue.
+    // Live on frameQueue, except _nativeCaptureEnabled which is set when a capture starts.
+    bool _nativeCaptureEnabled;
+    tgcalls::NativeCaptureHealth _nativeHealth;
+    bool _didLogCaptureMode;
     float _aspectRatio;
     std::vector<uint8_t> _croppingBuffer;
     std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
@@ -345,8 +351,29 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
           _willBeRunning = false;
           return;
       }
+      // Debug Settings "Calls: native camera frames". Read once per capture so a running capture
+      // never changes path half way.
+      bool nativeCapture = tgcalls::CallsRuntimeSwitches::nativeCapturePath();
+      NSInteger captureFps = fps;
+      if (nativeCapture) {
+          double minSupportedFps = 1000.0;
+          double maxSupportedFps = 0.0;
+          for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
+              minSupportedFps = MIN(minSupportedFps, range.minFrameRate);
+              maxSupportedFps = MAX(maxSupportedFps, range.maxFrameRate);
+          }
+          // The call adapts camera frames to 25 fps; producing them at that rate saves the frames
+          // the adapter would drop.
+          captureFps = tgcalls::chooseCaptureFps(25, (int)fps, minSupportedFps, maxSupportedFps);
+      }
+      dispatch_sync(self.frameQueue, ^{
+          _nativeCaptureEnabled = nativeCapture;
+          _nativeHealth = tgcalls::NativeCaptureHealth();
+          _didLogCaptureMode = false;
+      });
+      _videoDataOutput.alwaysDiscardsLateVideoFrames = nativeCapture ? YES : NO;
       [self reconfigureCaptureSessionInput];
-      [self updateDeviceCaptureFormat:format fps:fps];
+      [self updateDeviceCaptureFormat:format fps:captureFps];
       [self updateVideoDataOutputPixelFormat:format];
       [_captureSession startRunning];
       [_currentDevice unlockForConfiguration];
@@ -584,6 +611,30 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     TGRTCCVPixelBuffer *uncroppedRtcPixelBuffer = rtcPixelBuffer;
 
     CGSize initialSize = CGSizeMake(uncroppedRtcPixelBuffer.width, uncroppedRtcPixelBuffer.height);
+
+    // Decided before any conversion: a paused camera used to be cropped and converted to I420 for
+    // nothing, thirty times a second.
+    tgcalls::CaptureFramePlan plan = tgcalls::planCameraFrame(_isPaused, _nativeCaptureEnabled, _nativeHealth.failed(), CVPixelBufferGetPixelFormatType(pixelBuffer));
+    if (plan == tgcalls::CaptureFramePlan::Drop) {
+        webrtc::VideoRotation pausedRotation = static_cast<webrtc::VideoRotation>(_rotation);
+        CGSize pausedPreviewSize = initialSize;
+        if (pausedRotation == 90 || pausedRotation == 270) {
+            pausedPreviewSize = CGSizeMake(pausedPreviewSize.height, pausedPreviewSize.width);
+        }
+        for (VideoCameraCapturerPreviewRecord *record in _previews) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                VideoCaptureView *captureView = record.view;
+                [captureView onFrameGenerated:pausedPreviewSize isMirrored:true rotation:0];
+            });
+        }
+        return;
+    }
+    if (!_didLogCaptureMode) {
+        _didLogCaptureMode = true;
+        RTC_LOG(LS_INFO) << "camera capture: " << (plan == tgcalls::CaptureFramePlan::Native ? "native NV12 frames" : "I420 copy")
+            << " format=" << (unsigned)CVPixelBufferGetPixelFormatType(pixelBuffer)
+            << " size=" << (int)initialSize.width << "x" << (int)initialSize.height;
+    }
     
     if (_aspectRatio > FLT_EPSILON) {
         float aspect = 1.0f / _aspectRatio;
@@ -658,11 +709,19 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
         });
     }
 
-    auto i420Buffer = [self prepareI420Buffer:[rtcPixelBuffer pixelBuffer]];
+    webrtc::scoped_refptr<webrtc::VideoFrameBuffer> frameBuffer;
+    if (plan == tgcalls::CaptureFramePlan::Native) {
+        // The camera's pixel buffer goes to the encoder as it is (its pool recycles it once the
+        // encoder and the preview sinks let go).
+        frameBuffer = rtc::make_ref_counted<webrtc::ObjCFrameBuffer>(rtcPixelBuffer);
+    }
+    if (!frameBuffer) {
+        frameBuffer = [self prepareI420Buffer:[rtcPixelBuffer pixelBuffer]];
+    }
     
-    if (!_isPaused && i420Buffer) {
+    if (!_isPaused && frameBuffer) {
         auto videoFrame = webrtc::VideoFrame::Builder()
-            .set_video_frame_buffer(i420Buffer)
+            .set_video_frame_buffer(frameBuffer)
             .set_rotation(rotation)
             .set_timestamp_us(timeStampNs)
             .build();
@@ -707,6 +766,15 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
   NSString *droppedReason =
       (__bridge NSString *)CMGetAttachment(sampleBuffer, kCMSampleBufferAttachmentKey_DroppedFrameReason, nil);
   RTCLogError(@"Dropped sample buffer. Reason: %@", droppedReason);
+  if (_nativeCaptureEnabled) {
+    // Runs on the frame queue. A burst of "OutOfBuffers" means the native frames held downstream
+    // starve the camera's buffer pool: go back to the I420 copy for the rest of this capture.
+    bool outOfBuffers = [droppedReason containsString:@"OutOfBuffers"];
+    int64_t nowMs = (int64_t)(CACurrentMediaTime() * 1000.0);
+    if (_nativeHealth.onFrameDropped(outOfBuffers, nowMs)) {
+      RTC_LOG(LS_WARNING) << "camera capture: native frames starved the camera buffer pool, back to the I420 copy";
+    }
+  }
 }
 
 #pragma mark - AVCaptureSession notifications
