@@ -28,6 +28,9 @@
 #import "components/video_frame_buffer/RTCCVPixelBuffer.h"
 #import "helpers.h"
 #import "TGRTCScreenVideoRange.h"
+#include "TGRTCVideoRecovery.h"
+#include "TGCallsRuntimeOptions.h"
+#import "TGRTCPixelTransfer.h"
 
 #include "common_video/h264/h264_bitstream_parser.h"
 
@@ -335,6 +338,8 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
   std::unique_ptr<webrtc::BitrateAdjuster> _bitrateAdjuster;
   uint32_t _targetBitrateBps;
   uint32_t _encoderBitrateBps;
+  TGRTCPixelTransfer *_pixelTransfer;
+  BOOL _hardwareCropFailed;
   uint32_t _encoderFrameRate;
   uint32_t _maxAllowedFrameRate;
   RTCH264PacketizationMode _packetizationMode;
@@ -439,19 +444,38 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
       if (!pixelBuffer) {
         return WEBRTC_VIDEO_CODEC_ERROR;
       }
-      int dstWidth = (int)CVPixelBufferGetWidth(pixelBuffer);
-      int dstHeight = (int)CVPixelBufferGetHeight(pixelBuffer);
-      if ([rtcPixelBuffer requiresScalingToWidth:dstWidth height:dstHeight]) {
-        int size =
-            [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:dstWidth height:dstHeight];
-        _frameScaleBuffer.resize(size);
-      } else {
-        _frameScaleBuffer.clear();
+      BOOL didHardwareCrop = NO;
+#if TARGET_OS_OSX
+      if (!_hardwareCropFailed && tgcalls::RuntimeOptions::hardwareCrop().load()) {
+        if (!_pixelTransfer) {
+          _pixelTransfer = [[TGRTCPixelTransfer alloc] init];
+        }
+        didHardwareCrop = [_pixelTransfer cropAndScaleSource:rtcPixelBuffer.pixelBuffer
+                                                       cropX:rtcPixelBuffer.cropX
+                                                       cropY:rtcPixelBuffer.cropY
+                                                   cropWidth:rtcPixelBuffer.cropWidth
+                                                  cropHeight:rtcPixelBuffer.cropHeight
+                                                 destination:pixelBuffer];
+        if (!didHardwareCrop) {
+          _hardwareCropFailed = YES;
+          RTC_LOG(LS_WARNING) << "Hardware crop failed, using the software crop for this encoder";
+        }
       }
-      _frameScaleBuffer.shrink_to_fit();
-      if (![rtcPixelBuffer cropAndScaleTo:pixelBuffer withTempBuffer:_frameScaleBuffer.data()]) {
-        CVBufferRelease(pixelBuffer);
-        return WEBRTC_VIDEO_CODEC_ERROR;
+#endif
+      if (!didHardwareCrop) {
+        int dstWidth = (int)CVPixelBufferGetWidth(pixelBuffer);
+        int dstHeight = (int)CVPixelBufferGetHeight(pixelBuffer);
+        if ([rtcPixelBuffer requiresScalingToWidth:dstWidth height:dstHeight]) {
+          int size =
+              [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:dstWidth height:dstHeight];
+          _frameScaleBuffer.resize(size);
+        } else {
+          _frameScaleBuffer.clear();
+        }
+        if (![rtcPixelBuffer cropAndScaleTo:pixelBuffer withTempBuffer:_frameScaleBuffer.data()]) {
+          CVBufferRelease(pixelBuffer);
+          return WEBRTC_VIDEO_CODEC_ERROR;
+        }
       }
       CVBufferPropagateAttachments(rtcPixelBuffer.pixelBuffer, pixelBuffer);
     }
@@ -762,14 +786,14 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
 }
 
 - (void)setBitrateBps:(uint32_t)bitrateBps frameRate:(uint32_t)frameRate {
-  if (_encoderBitrateBps != bitrateBps || _encoderFrameRate != frameRate) {
+  if (_encoderFrameRate != frameRate || tgcalls::videorecovery::shouldApplyBitrate(_encoderBitrateBps, bitrateBps)) {
     [self setEncoderBitrateBps:bitrateBps frameRate:frameRate];
   }
 }
 
 - (void)setEncoderBitrateBps:(uint32_t)bitrateBps frameRate:(uint32_t)frameRate {
   if (_compressionSession) {
-    RTC_LOG(LS_ERROR) << "TGRTCVideoEncoderH264: setting bitrate to " << bitrateBps / 1024 << " kbit/s";
+    RTC_LOG(LS_INFO) << "TGRTCVideoEncoderH264: setting bitrate to " << bitrateBps / 1000 << " kbit/s";
       
     SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_AverageBitRate, bitrateBps);
 

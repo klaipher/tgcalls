@@ -38,6 +38,9 @@
 #include "sdk/objc/Framework/Classes/VideoToolbox/nalu_rewriter.h"
 #include "system_wrappers/include/clock.h"
 #include "h265_nalu_rewriter.h"
+#include "TGRTCVideoRecovery.h"
+#include "TGCallsRuntimeOptions.h"
+#import "TGRTCPixelTransfer.h"
 
 @interface RTC_OBJC_TYPE (RTCVideoEncoderH265)
 ()
@@ -180,6 +183,9 @@ void compressionOutputCallback(void* encoder,
   std::unique_ptr<webrtc::BitrateAdjuster> _bitrateAdjuster;
   uint32_t _targetBitrateBps;
   uint32_t _encoderBitrateBps;
+  TGRTCPixelTransfer *_pixelTransfer;
+  BOOL _hardwareCropFailed;
+  tgcalls::videorecovery::ResetLimiter _poolResetLimiter;
   CFStringRef _profile;
   RTCVideoEncoderCallback _callback;
   int32_t _width;
@@ -259,7 +265,7 @@ void compressionOutputCallback(void* encoder,
   _mode = settings.mode;
 
   // We can only set average bitrate on the HW encoder.
-  _targetBitrateBps = settings.startBitrate;
+  _targetBitrateBps = tgcalls::videorecovery::bitrateBpsFromKbps(settings.startBitrate);
   _bitrateAdjuster->SetTargetBitrateBps(_targetBitrateBps);
 
   // TODO(tkchin): Try setting payload size via
@@ -282,8 +288,7 @@ void compressionOutputCallback(void* encoder,
   CVPixelBufferPoolRef pixelBufferPool =
       VTCompressionSessionGetPixelBufferPool(_compressionSession);
 
-#if defined(WEBRTC_IOS)
-  if (!pixelBufferPool) {
+  if (!pixelBufferPool && _poolResetLimiter.tryReset(rtc::TimeMillis())) {
     // Kind of a hack. On backgrounding, the compression session seems to get
     // invalidated, which causes this pool call to fail when the application
     // is foregrounded and frames are being sent for encoding again.
@@ -293,9 +298,8 @@ void compressionOutputCallback(void* encoder,
     pixelBufferPool =
         VTCompressionSessionGetPixelBufferPool(_compressionSession);
     isKeyframeRequired = YES;
-    RTC_LOG(LS_INFO) << "Resetting compression session due to invalid pool.";
+    RTC_LOG(LS_WARNING) << "Resetting compression session due to invalid pool.";
   }
-#endif
 
   CVPixelBufferRef pixelBuffer = nullptr;
   if ([frame.buffer isKindOfClass:[RTCCVPixelBuffer class]]) {
@@ -314,9 +318,28 @@ void compressionOutputCallback(void* encoder,
       if (!pixelBuffer) {
         return WEBRTC_VIDEO_CODEC_ERROR;
       }
+      BOOL didHardwareCrop = NO;
+#if TARGET_OS_OSX
+      if (!_hardwareCropFailed && tgcalls::RuntimeOptions::hardwareCrop().load()) {
+        if (!_pixelTransfer) {
+          _pixelTransfer = [[TGRTCPixelTransfer alloc] init];
+        }
+        didHardwareCrop = [_pixelTransfer cropAndScaleSource:rtcPixelBuffer.pixelBuffer
+                                                       cropX:rtcPixelBuffer.cropX
+                                                       cropY:rtcPixelBuffer.cropY
+                                                   cropWidth:rtcPixelBuffer.cropWidth
+                                                  cropHeight:rtcPixelBuffer.cropHeight
+                                                 destination:pixelBuffer];
+        if (!didHardwareCrop) {
+          _hardwareCropFailed = YES;
+          RTC_LOG(LS_WARNING) << "Hardware crop failed, using the software crop for this encoder";
+        }
+      }
+#endif
       int dstWidth = (int)CVPixelBufferGetWidth(pixelBuffer);
       int dstHeight = (int)CVPixelBufferGetHeight(pixelBuffer);
-      if ([rtcPixelBuffer requiresScalingToWidth:dstWidth height:dstHeight]) {
+      if (didHardwareCrop) {
+      } else if ([rtcPixelBuffer requiresScalingToWidth:dstWidth height:dstHeight]) {
         int size =
             [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:dstWidth
                                                             height:dstHeight];
@@ -324,8 +347,7 @@ void compressionOutputCallback(void* encoder,
       } else {
         _nv12ScaleBuffer.clear();
       }
-      _nv12ScaleBuffer.shrink_to_fit();
-      if (![rtcPixelBuffer cropAndScaleTo:pixelBuffer
+      if (!didHardwareCrop && ![rtcPixelBuffer cropAndScaleTo:pixelBuffer
                            withTempBuffer:_nv12ScaleBuffer.data()]) {
         CVBufferRelease(pixelBuffer);
         return WEBRTC_VIDEO_CODEC_ERROR;
@@ -562,7 +584,7 @@ void compressionOutputCallback(void* encoder,
 }
 
 - (void)setBitrateBps:(uint32_t)bitrateBps {
-  if (_encoderBitrateBps != bitrateBps) {
+  if (tgcalls::videorecovery::shouldApplyBitrate(_encoderBitrateBps, bitrateBps)) {
     [self setEncoderBitrateBps:bitrateBps];
   }
 }
