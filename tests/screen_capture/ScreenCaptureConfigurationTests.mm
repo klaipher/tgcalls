@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <CoreVideo/CoreVideo.h>
 #import "ScreenCaptureKitConfiguration.h"
+#import "ScreenCaptureKitSources.h"
 
 static int failures = 0;
 
@@ -72,6 +73,41 @@ int main() {
         }
         CVPixelBufferRelease(untaggedFrame);
         CVPixelBufferRelease(taggedFrame);
+
+        NSArray<TGScreenCaptureWindowCandidate *> *candidates = @[
+            [[TGScreenCaptureWindowCandidate alloc] initWithWindowID:10 layer:0 onScreen:YES title:@"Report.pages" ownerName:@"Pages" ownerPid:100],
+            [[TGScreenCaptureWindowCandidate alloc] initWithWindowID:11 layer:25 onScreen:YES title:@"Dock" ownerName:@"Dock" ownerPid:101],
+            [[TGScreenCaptureWindowCandidate alloc] initWithWindowID:12 layer:0 onScreen:NO title:@"Minimized" ownerName:@"Notes" ownerPid:102],
+            [[TGScreenCaptureWindowCandidate alloc] initWithWindowID:13 layer:0 onScreen:YES title:@"" ownerName:@"Pages" ownerPid:100],
+            [[TGScreenCaptureWindowCandidate alloc] initWithWindowID:14 layer:0 onScreen:YES title:nil ownerName:@"Calculator" ownerPid:103],
+            [[TGScreenCaptureWindowCandidate alloc] initWithWindowID:15 layer:0 onScreen:YES title:nil ownerName:@"Calculator" ownerPid:103],
+            [[TGScreenCaptureWindowCandidate alloc] initWithWindowID:16 layer:0 onScreen:YES title:@"StatusIndicator" ownerName:@"Window Server" ownerPid:104],
+            [[TGScreenCaptureWindowCandidate alloc] initWithWindowID:17 layer:0 onScreen:YES title:nil ownerName:nil ownerPid:105],
+        ];
+        NSArray<TGScreenCaptureListedSource *> *listed = TGScreenCaptureListedWindows(candidates);
+        NSMutableArray<NSString *> *summary = [[NSMutableArray alloc] init];
+        for (TGScreenCaptureListedSource *source in listed) {
+            [summary addObject:[NSString stringWithFormat:@"%lld:%@", source.uniqueId, source.title]];
+        }
+        expect([summary isEqualToArray:@[ @"10:Report.pages", @"14:Calculator" ]], [NSString stringWithFormat:@"the window list keeps webrtc's rules on SCShareableContent (layer 0, on screen, untitled only as the app's one window named after the app, no status indicator): %@", summary]);
+
+        CGSize thumbnail = TGScreenCaptureFillSize(CGSizeMake(5120, 2880), CGSizeMake(270, 180));
+        expect(thumbnail.width == 320 && thumbnail.height == 180, @"a thumbnail is captured just large enough to fill its tile (5K display → 320x180), not at full resolution");
+        CGSize tiny = TGScreenCaptureFillSize(CGSizeMake(200, 100), CGSizeMake(270, 180));
+        expect(tiny.width == 200 && tiny.height == 100, @"a small window is never upscaled");
+        expect(TGScreenCapturePreviewUsesScreenshots(0.5) && !TGScreenCapturePreviewUsesScreenshots(24), @"picker tiles (0.5 fps) are screenshots, the large preview (24 fps) is a stream");
+        expect(TGScreenCaptureScreenshotInterval(0.5) == 2.0, @"tiles refresh every 2 s, as before");
+        SCStreamConfiguration *thumbnailConfiguration = TGScreenCaptureThumbnailConfiguration(CGSizeMake(5120, 2880), CGSizeMake(270, 180), NO);
+        expect(thumbnailConfiguration.width == 320 && thumbnailConfiguration.height == 180 && thumbnailConfiguration.pixelFormat == kCVPixelFormatType_32BGRA && !thumbnailConfiguration.showsCursor, @"the screenshot is BGRA at the tile size, without the cursor");
+        SCStreamConfiguration *previewConfiguration = TGScreenCapturePreviewConfiguration(CGSizeMake(5120, 2880), CGSizeMake(1000, 700), 24.0, YES);
+        expect(previewConfiguration.width <= 1000 && previewConfiguration.height <= 700 && previewConfiguration.width >= 998 && previewConfiguration.pixelFormat == kCVPixelFormatType_32BGRA && CMTimeCompare(previewConfiguration.minimumFrameInterval, CMTimeMake(1, 24)) == 0 && previewConfiguration.showsCursor, @"the large preview streams BGRA fitted into its box at 24 fps with the cursor");
+
+        if (CGPreflightScreenCaptureAccess()) {
+            NSArray<TGScreenCaptureListedSource *> *displays = [[TGScreenCaptureContentCache shared] displaysWaitingAtMost:5.0];
+            expect(displays.count > 0 && [displays.firstObject.title isEqualToString:@"Screen"], @"SCShareableContent lists the displays (live)");
+        } else {
+            fprintf(stderr, "skip: SCShareableContent listing (no Screen Recording permission for the test runner)\n");
+        }
 
         CFRelease(complete);
         CFRelease(idle);
