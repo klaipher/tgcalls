@@ -184,6 +184,7 @@ void compressionOutputCallback(void* encoder,
   int32_t _width;
   int32_t _height;
   VTCompressionSessionRef _compressionSession;
+  bool _usesRealTimeEncoding;
   RTCVideoCodecMode _mode;
   int framesLeft;
 
@@ -416,6 +417,10 @@ void compressionOutputCallback(void* encoder,
       encoder_specs,
       kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
       kCFBooleanTrue);
+  bool lowLatencyRateControl = true;
+  if (lowLatencyRateControl) {
+    CFDictionarySetValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl, kCFBooleanTrue);
+  }
 #endif
   OSStatus status = VTCompressionSessionCreate(
       nullptr,  // use default allocator
@@ -424,6 +429,15 @@ void compressionOutputCallback(void* encoder,
       sourceAttributes,
       nullptr,  // use default compressed data allocator
       compressionOutputCallback, nullptr, &_compressionSession);
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
+  if (status != noErr && lowLatencyRateControl) {
+    RTC_LOG(LS_INFO) << "Low-latency rate control is unavailable, retrying without it: " << status;
+    CFDictionaryRemoveValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl);
+    lowLatencyRateControl = false;
+    status = VTCompressionSessionCreate(nullptr, _width, _height, kCMVideoCodecType_HEVC, encoder_specs, sourceAttributes, nullptr, compressionOutputCallback, nullptr, &_compressionSession);
+  }
+  _usesRealTimeEncoding = true;
+#endif
   if (sourceAttributes) {
     CFRelease(sourceAttributes);
     sourceAttributes = nullptr;
@@ -455,7 +469,10 @@ void compressionOutputCallback(void* encoder,
 - (void)configureCompressionSession {
   RTC_DCHECK(_compressionSession);
   SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_RealTime,
-                       false);
+                       _usesRealTimeEncoding);
+  if (_usesRealTimeEncoding) {
+    SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_ExpectedFrameRate, 25);
+  }
   // SetVTSessionProperty(_compressionSession,
   // kVTCompressionPropertyKey_ProfileLevel, _profile);
   SetVTSessionProperty(_compressionSession,

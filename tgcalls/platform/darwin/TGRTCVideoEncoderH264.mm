@@ -323,6 +323,10 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
 }
 }  // namespace
 
+static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId &profile_level_id) {
+  return profile_level_id.profile == webrtc::H264Profile::kProfileConstrainedHigh || profile_level_id.profile == webrtc::H264Profile::kProfileHigh;
+}
+
 @implementation TGRTCVideoEncoderH264 {
   RTCVideoCodecInfo *_codecInfo;
   std::unique_ptr<webrtc::BitrateAdjuster> _bitrateAdjuster;
@@ -332,6 +336,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
   uint32_t _maxAllowedFrameRate;
   RTCH264PacketizationMode _packetizationMode;
   absl::optional<webrtc::H264ProfileLevelId> _profile_level_id;
+  bool _usesRealTimeEncoding;
   RTCVideoEncoderCallback _callback;
   int32_t _width;
   int32_t _height;
@@ -649,6 +654,10 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
   CFDictionarySetValue(encoder_specs,
                        kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
                        kCFBooleanTrue);
+  bool lowLatencyRateControl = TGRTCH264UsesLowLatencyRateControl(*_profile_level_id);
+  if (lowLatencyRateControl) {
+    CFDictionarySetValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl, kCFBooleanTrue);
+  }
 #endif
   OSStatus status =
       VTCompressionSessionCreate(nullptr,  // use default allocator
@@ -661,6 +670,15 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
                                  compressionOutputCallback,
                                  nullptr,
                                  &_compressionSession);
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
+  if (status != noErr && lowLatencyRateControl) {
+    RTC_LOG(LS_INFO) << "Low-latency rate control is unavailable, retrying without it: " << status;
+    CFDictionaryRemoveValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl);
+    lowLatencyRateControl = false;
+    status = VTCompressionSessionCreate(nullptr, _width, _height, kCMVideoCodecType_H264, encoder_specs, sourceAttributes, nullptr, compressionOutputCallback, nullptr, &_compressionSession);
+  }
+  _usesRealTimeEncoding = true;
+#endif
   if (sourceAttributes) {
     CFRelease(sourceAttributes);
     sourceAttributes = nullptr;
@@ -696,7 +714,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
 
 - (void)configureCompressionSession {
   RTC_DCHECK(_compressionSession);
-  SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_RealTime, false);
+  SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_RealTime, _usesRealTimeEncoding);
   SetVTSessionProperty(_compressionSession,
                        kVTCompressionPropertyKey_ProfileLevel,
                        ExtractProfile(*_profile_level_id));
