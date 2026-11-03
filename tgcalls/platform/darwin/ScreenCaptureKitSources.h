@@ -12,6 +12,8 @@ API_AVAILABLE(macos(14.0))
 @interface TGScreenCaptureContentCache : NSObject
 
 + (instancetype)shared;
+- (instancetype)initWithFetcher:(void (^)(void (^completion)(SCShareableContent * _Nullable content)))fetcher;
+- (void)refreshWithCompletion:(dispatch_block_t)completion;
 - (nullable SCShareableContent *)contentWaitingAtMost:(NSTimeInterval)timeout;
 - (NSArray<TGScreenCaptureListedSource *> *)displaysWaitingAtMost:(NSTimeInterval)timeout;
 - (NSArray<TGScreenCaptureListedSource *> *)windowsWaitingAtMost:(NSTimeInterval)timeout;

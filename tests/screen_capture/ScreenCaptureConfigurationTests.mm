@@ -102,6 +102,21 @@ int main() {
         SCStreamConfiguration *previewConfiguration = TGScreenCapturePreviewConfiguration(CGSizeMake(5120, 2880), CGSizeMake(1000, 700), 24.0, YES);
         expect(previewConfiguration.width <= 1000 && previewConfiguration.height <= 700 && previewConfiguration.width >= 998 && previewConfiguration.pixelFormat == kCVPixelFormatType_32BGRA && CMTimeCompare(previewConfiguration.minimumFrameInterval, CMTimeMake(1, 24)) == 0 && previewConfiguration.showsCursor, @"the large preview streams BGRA fitted into its box at 24 fps with the cursor");
 
+        __block NSInteger coldFetches = 0;
+        TGScreenCaptureContentCache *coldCache = [[TGScreenCaptureContentCache alloc] initWithFetcher:^(void (^completion)(SCShareableContent *)) {
+            coldFetches += 1;
+        }];
+        CFAbsoluteTime coldStart = CFAbsoluteTimeGetCurrent();
+        NSArray<TGScreenCaptureListedSource *> *coldDisplays = [coldCache displaysWaitingAtMost:5.0];
+        [coldCache windowsWaitingAtMost:5.0];
+        [coldCache contentWaitingAtMost:5.0];
+        CFAbsoluteTime coldElapsed = CFAbsoluteTimeGetCurrent() - coldStart;
+        expect(coldElapsed < 0.2, [NSString stringWithFormat:@"the main thread never waits for SCShareableContent (cold cache took %.3f s)", coldElapsed]);
+        uint32_t activeDisplayCount = 0;
+        CGGetActiveDisplayList(0, NULL, &activeDisplayCount);
+        expect(coldFetches == 1, [NSString stringWithFormat:@"one refresh is started in the background, not one per call (%ld)", (long)coldFetches]);
+        expect(coldDisplays.count == activeDisplayCount && activeDisplayCount > 0 && [coldDisplays.firstObject.title isEqualToString:@"Screen"], [NSString stringWithFormat:@"with no cached content the main thread lists the active displays from CoreGraphics (%lu of %u)", (unsigned long)coldDisplays.count, activeDisplayCount]);
+
         if (CGPreflightScreenCaptureAccess()) {
             NSArray<TGScreenCaptureListedSource *> *displays = [[TGScreenCaptureContentCache shared] displaysWaitingAtMost:5.0];
             expect(displays.count > 0 && [displays.firstObject.title isEqualToString:@"Screen"], @"SCShareableContent lists the displays (live)");

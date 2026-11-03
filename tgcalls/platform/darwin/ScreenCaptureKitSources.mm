@@ -11,6 +11,7 @@ static const NSTimeInterval TGScreenCaptureContentLifetime = 1.0;
     CFAbsoluteTime _timestamp;
     NSMutableArray<dispatch_block_t> *_pending;
     BOOL _loading;
+    void (^_fetcher)(void (^)(SCShareableContent *));
 }
 
 + (instancetype)shared {
@@ -23,10 +24,19 @@ static const NSTimeInterval TGScreenCaptureContentLifetime = 1.0;
 }
 
 - (instancetype)init {
+    return [self initWithFetcher:^(void (^completion)(SCShareableContent *)) {
+        [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES completionHandler:^(SCShareableContent *content, NSError *error) {
+            completion(content);
+        }];
+    }];
+}
+
+- (instancetype)initWithFetcher:(void (^)(void (^)(SCShareableContent *)))fetcher {
     self = [super init];
     if (self != nil) {
         _lock = [[NSLock alloc] init];
         _pending = [[NSMutableArray alloc] init];
+        _fetcher = [fetcher copy];
     }
     return self;
 }
@@ -41,7 +51,7 @@ static const NSTimeInterval TGScreenCaptureContentLifetime = 1.0;
     _loading = YES;
     [_lock unlock];
     __weak TGScreenCaptureContentCache *weakSelf = self;
-    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES completionHandler:^(SCShareableContent *content, NSError *error) {
+    _fetcher(^(SCShareableContent *content) {
         TGScreenCaptureContentCache *strongSelf = weakSelf;
         if (strongSelf == nil) {
             return;
@@ -58,7 +68,7 @@ static const NSTimeInterval TGScreenCaptureContentLifetime = 1.0;
         for (dispatch_block_t block in pending) {
             block();
         }
-    }];
+    });
 }
 
 - (SCShareableContent *)contentWaitingAtMost:(NSTimeInterval)timeout {
@@ -69,7 +79,7 @@ static const NSTimeInterval TGScreenCaptureContentLifetime = 1.0;
     if (!stale) {
         return content;
     }
-    if (content != nil) {
+    if (content != nil || [NSThread isMainThread]) {
         [self refreshWithCompletion:^{}];
         return content;
     }
@@ -87,6 +97,19 @@ static const NSTimeInterval TGScreenCaptureContentLifetime = 1.0;
 - (NSArray<TGScreenCaptureListedSource *> *)displaysWaitingAtMost:(NSTimeInterval)timeout {
     SCShareableContent *content = [self contentWaitingAtMost:timeout];
     NSMutableArray<TGScreenCaptureListedSource *> *result = [[NSMutableArray alloc] init];
+    if (content == nil) {
+        uint32_t count = 0;
+        if (CGGetActiveDisplayList(0, NULL, &count) == kCGErrorSuccess && count > 0) {
+            CGDirectDisplayID *displays = (CGDirectDisplayID *)calloc(count, sizeof(CGDirectDisplayID));
+            if (CGGetActiveDisplayList(count, displays, &count) == kCGErrorSuccess) {
+                for (uint32_t index = 0; index < count; index++) {
+                    [result addObject:[[TGScreenCaptureListedSource alloc] initWithUniqueId:displays[index] title:@"Screen"]];
+                }
+            }
+            free(displays);
+        }
+        return result;
+    }
     for (SCDisplay *display in content.displays) {
         [result addObject:[[TGScreenCaptureListedSource alloc] initWithUniqueId:display.displayID title:@"Screen"]];
     }
@@ -205,8 +228,32 @@ static const NSTimeInterval TGScreenCaptureContentLifetime = 1.0;
     [stream stopCaptureWithCompletionHandler:nil];
 }
 
+- (SCShareableContent *)contentOrRetry:(void (^)(TGScreenCapturePreviewView *view))retry {
+    SCShareableContent *content = [[TGScreenCaptureContentCache shared] contentWaitingAtMost:0.5];
+    if (content != nil) {
+        return content;
+    }
+    NSInteger generation = _generation;
+    __weak TGScreenCapturePreviewView *weakSelf = self;
+    [[TGScreenCaptureContentCache shared] refreshWithCompletion:^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TGScreenCapturePreviewView *strongSelf = weakSelf;
+            if (strongSelf != nil && strongSelf->_running && strongSelf->_generation == generation && strongSelf->_stream == nil && [[TGScreenCaptureContentCache shared] contentWaitingAtMost:0.0] != nil) {
+                retry(strongSelf);
+            }
+        });
+    }];
+    return nil;
+}
+
 - (void)captureScreenshot {
-    SCContentFilter *filter = [self makeFilter:[[TGScreenCaptureContentCache shared] contentWaitingAtMost:0.5]];
+    SCShareableContent *content = [self contentOrRetry:^(TGScreenCapturePreviewView *view) {
+        [view captureScreenshot];
+    }];
+    if (content == nil) {
+        return;
+    }
+    SCContentFilter *filter = [self makeFilter:content];
     if (filter == nil) {
         return;
     }
@@ -229,7 +276,13 @@ static const NSTimeInterval TGScreenCaptureContentLifetime = 1.0;
 }
 
 - (void)startStream {
-    SCContentFilter *filter = [self makeFilter:[[TGScreenCaptureContentCache shared] contentWaitingAtMost:0.5]];
+    SCShareableContent *content = [self contentOrRetry:^(TGScreenCapturePreviewView *view) {
+        [view startStream];
+    }];
+    if (content == nil) {
+        return;
+    }
+    SCContentFilter *filter = [self makeFilter:content];
     if (filter == nil) {
         return;
     }
