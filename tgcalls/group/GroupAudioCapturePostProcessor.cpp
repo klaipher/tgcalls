@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "common_audio/resampler/push_sinc_resampler.h"
 #include "modules/audio_processing/audio_buffer.h"
 
 #if USE_RNNOISE
@@ -38,6 +39,16 @@ bool VadHistory::update(float vadProbability) {
     return vadResult;
 }
 
+bool PeakSpeechDetector::update(float framePeak) {
+    if (!_hasFloor || framePeak < _floor) {
+        _floor = framePeak;
+        _hasFloor = true;
+    } else {
+        _floor = std::max(_floor * kFloorRisePerFrame, 1.0f);
+    }
+    return framePeak >= std::max(kMinimumSpeechPeak, _floor * kSpeechToFloorRatio);
+}
+
 #if USE_RNNOISE
 
 AudioCapturePostProcessor::AudioCapturePostProcessor(std::function<void(GroupLevelValue const &)> updated, std::shared_ptr<NoiseSuppressionConfiguration> noiseSuppressionConfiguration, std::vector<float> *externalAudioSamples, webrtc::Mutex *externalAudioSamplesMutex) :
@@ -58,65 +69,67 @@ AudioCapturePostProcessor::~AudioCapturePostProcessor() {
 }
 
 void AudioCapturePostProcessor::Initialize(int sample_rate_hz, int num_channels) {
-    _currentSampleRate = sample_rate_hz;
-    _resampledBuffer.reset();
 }
 
-void AudioCapturePostProcessor::Process(webrtc::AudioBuffer *originalBuffer) {
-    if (!originalBuffer) {
+void AudioCapturePostProcessor::Process(webrtc::AudioBuffer *buffer) {
+    if (!buffer) {
         return;
     }
-    if (originalBuffer->num_channels() != 1) {
+    if (buffer->num_channels() != 1) {
         return;
     }
     if (!_denoiseState) {
         return;
     }
-    
-    webrtc::AudioBuffer *buffer = originalBuffer;
-    
-    if (buffer->num_frames() != _frameSamples.size()) {
-        // Kept across frames: building one allocates and initializes resamplers and a band filter.
-        if (!_resampledBuffer) {
-            _resampledBuffer = std::make_unique<webrtc::AudioBuffer>((size_t)_currentSampleRate, 1, 48000, 1, 48000, 1);
-        }
-        webrtc::StreamConfig config(_currentSampleRate, 1);
-        _resampledBuffer->CopyFrom(buffer->channels(), config);
-        buffer = _resampledBuffer.get();
+
+    size_t captureFrames = buffer->num_frames();
+    size_t processingFrames = _frameSamples.size();
+    if (captureFrames == processingFrames) {
+        processAtProcessingRate(buffer->channels()[0]);
+        return;
     }
 
+    if (!_toProcessingRate || _resamplerCaptureFrames != captureFrames) {
+        _toProcessingRate = std::make_unique<webrtc::PushSincResampler>(captureFrames, processingFrames);
+        _fromProcessingRate = std::make_unique<webrtc::PushSincResampler>(processingFrames, captureFrames);
+        _processingSamples.assign(processingFrames, 0.0f);
+        _resamplerCaptureFrames = captureFrames;
+    }
+    _toProcessingRate->Resample(buffer->channels()[0], captureFrames, _processingSamples.data(), processingFrames);
+    if (processAtProcessingRate(_processingSamples.data())) {
+        _fromProcessingRate->Resample(_processingSamples.data(), processingFrames, buffer->channels()[0], captureFrames);
+    }
+}
+
+bool AudioCapturePostProcessor::processAtProcessingRate(float *samples) {
+    size_t frames = _frameSamples.size();
+    bool modified = false;
+
     float sourcePeak = 0.0f;
-    float *sourceSamples = buffer->channels()[0];
-    for (int i = 0; i < _frameSamples.size(); i++) {
-        sourcePeak = std::max(std::fabs(sourceSamples[i]), sourcePeak);
+    for (size_t i = 0; i < frames; i++) {
+        sourcePeak = std::max(std::fabs(samples[i]), sourcePeak);
     }
 
     if (_noiseSuppressionConfiguration) {
         float vadProbability = 0.0f;
-        if (sourcePeak >= 0.01f) {
-            vadProbability = rnnoise_process_frame(_denoiseState, _frameSamples.data(), buffer->channels()[0]);
-            if (_noiseSuppressionConfiguration->isEnabled) {
-                memcpy(buffer->channels()[0], _frameSamples.data(), _frameSamples.size() * sizeof(float));
+        if (_noiseSuppressionConfiguration->isEnabled) {
+            if (sourcePeak >= 0.01f) {
+                vadProbability = rnnoise_process_frame(_denoiseState, _frameSamples.data(), samples);
+                memcpy(samples, _frameSamples.data(), frames * sizeof(float));
+                modified = true;
             }
+        } else {
+            vadProbability = _peakSpeechDetector.update(sourcePeak) ? 1.0f : 0.0f;
         }
 
         float peak = 0;
-        int peakCount = 0;
-        const float *samples = buffer->channels_const()[0];
-        for (int i = 0; i < buffer->num_frames(); i++) {
-            float sample = samples[i];
-            if (sample < 0) {
-                sample = -sample;
-            }
-            if (peak < sample) {
-                peak = sample;
-            }
-            peakCount += 1;
+        for (size_t i = 0; i < frames; i++) {
+            peak = std::max(std::fabs(samples[i]), peak);
         }
 
         bool vadStatus = _history.update(vadProbability);
 
-        _peakCount += peakCount;
+        _peakCount += (int32_t)frames;
         if (_peak < peak) {
             _peak = peak;
         }
@@ -131,21 +144,9 @@ void AudioCapturePostProcessor::Process(webrtc::AudioBuffer *originalBuffer) {
             });
         }
     } else {
-        float peak = 0;
-        int peakCount = 0;
-        const float *samples = buffer->channels_const()[0];
-        for (int i = 0; i < buffer->num_frames(); i++) {
-            float sample = samples[i];
-            if (sample < 0) {
-                sample = -sample;
-            }
-            if (peak < sample) {
-                peak = sample;
-            }
-            peakCount += 1;
-        }
+        float peak = sourcePeak;
 
-        _peakCount += peakCount;
+        _peakCount += (int32_t)frames;
         if (_peak < peak) {
             _peak = peak;
         }
@@ -164,22 +165,24 @@ void AudioCapturePostProcessor::Process(webrtc::AudioBuffer *originalBuffer) {
     if (_externalAudioSamplesMutex && _externalAudioSamples) {
         _externalAudioSamplesMutex->Lock();
         if (!_externalAudioSamples->empty()) {
-            float *bufferData = buffer->channels()[0];
-            int takenSamples = 0;
-            for (int i = 0; i < _externalAudioSamples->size() && i < _frameSamples.size(); i++) {
+            size_t takenSamples = 0;
+            for (size_t i = 0; i < _externalAudioSamples->size() && i < frames; i++) {
                 float sample = (*_externalAudioSamples)[i];
-                sample += bufferData[i];
+                sample += samples[i];
                 sample = std::min(sample, 32768.f);
                 sample = std::max(sample, -32768.f);
-                bufferData[i] = sample;
+                samples[i] = sample;
                 takenSamples++;
             }
             if (takenSamples != 0) {
                 _externalAudioSamples->erase(_externalAudioSamples->begin(), _externalAudioSamples->begin() + takenSamples);
+                modified = true;
             }
         }
         _externalAudioSamplesMutex->Unlock();
     }
+
+    return modified;
 }
 
 std::string AudioCapturePostProcessor::ToString() const {
