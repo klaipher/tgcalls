@@ -43,6 +43,9 @@ static tgcalls::DarwinVideoTrackSource *getScreenCaptureVideoSource(const rtc::s
     std::function<void(bool)> _onPause;
     dispatch_queue_t _queue;
     SCStream *_stream;
+    // Touched only on _queue: the stream whose frames are accepted. Samples that a stopped stream had already
+    // queued on _queue arrive after the stop block and must not repopulate _lastVideoFrame or reach the encoder.
+    SCStream *_activeStream;
     NSInteger _generation;
     bool _isRunning;
     bool _isPaused;
@@ -166,7 +169,7 @@ static tgcalls::DarwinVideoTrackSource *getScreenCaptureVideoSource(const rtc::s
         return;
     }
     _stream = stream;
-    [self startRepeating];
+    [self startRepeatingForStream:stream];
     __weak ScreenCaptureKitCapturer *weakSelf = self;
     [stream startCaptureWithCompletionHandler:^(NSError *error) {
         if (error != nil) {
@@ -189,8 +192,12 @@ static tgcalls::DarwinVideoTrackSource *getScreenCaptureVideoSource(const rtc::s
     [self stopRepeating];
 }
 
-- (void)startRepeating {
+- (void)startRepeatingForStream:(SCStream *)stream {
     dispatch_async(_queue, ^{
+        // A new capture never starts from the picture before the pause.
+        self->_activeStream = stream;
+        self->_repeater.reset();
+        self->_lastVideoFrame = nil;
         if (self->_repeatTimer != nil) {
             return;
         }
@@ -212,6 +219,7 @@ static tgcalls::DarwinVideoTrackSource *getScreenCaptureVideoSource(const rtc::s
             dispatch_source_cancel(self->_repeatTimer);
             self->_repeatTimer = nil;
         }
+        self->_activeStream = nil;
         self->_repeater.reset();
         self->_lastVideoFrame = nil;
     });
@@ -248,7 +256,7 @@ static tgcalls::DarwinVideoTrackSource *getScreenCaptureVideoSource(const rtc::s
 }
 
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer ofType:(SCStreamOutputType)type {
-    if (type != SCStreamOutputTypeScreen || !TGScreenCaptureSampleBufferIsComplete(sampleBuffer)) {
+    if (type != SCStreamOutputTypeScreen || stream != _activeStream || !TGScreenCaptureSampleBufferIsComplete(sampleBuffer)) {
         return;
     }
     CVPixelBufferRef pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
