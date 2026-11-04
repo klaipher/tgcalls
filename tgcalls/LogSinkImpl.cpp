@@ -14,6 +14,7 @@ namespace tgcalls {
 LogSinkImpl::LogSinkImpl(const FilePath &logPath, size_t maxBytes) :
 _maxBytes(maxBytes) {
 	if (!logPath.data.empty()) {
+		_path = logPath.data;
 		_file.open(logPath.data);
 	} else {
 		_discards = true;
@@ -60,14 +61,14 @@ void LogSinkImpl::OnLogMessage(const std::string &message) {
 	int32_t milliseconds = curTime.tv_usec / 1000;
 #endif
 
-	if (!_discards && !_truncated) {
-		auto &stream = _file.is_open() ? (std::ostream&)_file : _data;
+	if (!_discards) {
 		// 24 bytes for the timestamp prefix.
 		_writtenBytes += message.size() + 24;
 		if (_writtenBytes > _maxBytes) {
-			_truncated = true;
-			stream << "log truncated: size limit reached\n";
-		} else stream
+			dropOldestHalf();
+		}
+		auto &stream = _file.is_open() ? (std::ostream&)_file : _data;
+		stream
 			<< (timeinfo.tm_year + 1900)
 			<< "-" << (timeinfo.tm_mon + 1)
 			<< "-" << (timeinfo.tm_mday)
@@ -81,6 +82,39 @@ void LogSinkImpl::OnLogMessage(const std::string &message) {
 #if DEBUG
     printf("%d-%d-%d %d:%d:%d:%d %s\n", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, milliseconds, message.c_str());
 #endif
+}
+
+// Keeps the newest half of the log, starting at a line, behind a marker; the log restarts at about half of the cap.
+void LogSinkImpl::dropOldestHalf() {
+	static const char *const marker = "log head dropped: older lines were removed to keep the log under its size limit\n";
+	const size_t keep = _maxBytes / 2;
+	std::string tail;
+	if (_file.is_open()) {
+		_file.flush();
+		std::ifstream reader(_path, std::ios::binary | std::ios::ate);
+		if (reader.is_open()) {
+			const std::streamoff size = reader.tellg();
+			const std::streamoff start = size > (std::streamoff)keep ? size - (std::streamoff)keep : 0;
+			reader.seekg(start);
+			tail.resize((size_t)(size - start));
+			reader.read(&tail[0], (std::streamsize)tail.size());
+			tail.resize((size_t)reader.gcount());
+		}
+		_file.close();
+		_file.open(_path, std::ios::out | std::ios::trunc);
+	} else {
+		const std::string all = _data.str();
+		tail = all.size() > keep ? all.substr(all.size() - keep) : all;
+		_data.str(std::string());
+		_data.clear();
+	}
+	const auto lineStart = tail.find('\n');
+	if (lineStart != std::string::npos && tail.size() > keep / 2) {
+		tail.erase(0, lineStart + 1);
+	}
+	auto &stream = _file.is_open() ? (std::ostream&)_file : _data;
+	stream << marker << tail;
+	_writtenBytes = std::string(marker).size() + tail.size();
 }
 
 void configureDebugLogging(rtc::LoggingSeverity debugBuildSeverity) {

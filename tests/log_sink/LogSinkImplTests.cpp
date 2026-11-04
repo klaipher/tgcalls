@@ -81,7 +81,7 @@ static std::string readFile(const char *path) {
     return contents.str();
 }
 
-static void fileLogStopsAtItsSizeCap() {
+static void fileLogKeepsTheTailWithinItsSizeCap() {
     const char *directory = std::getenv("TMPDIR");
     std::string pattern = std::string(directory ? directory : "/tmp") + "/tgcalls-log-cap-XXXXXX";
     std::vector<char> name(pattern.begin(), pattern.end());
@@ -92,31 +92,36 @@ static void fileLogStopsAtItsSizeCap() {
     {
         LogSinkImpl sink(path, 4096);
         for (int i = 0; i < 10000; i++) {
-            sink.OnLogMessage("a log line that is long enough to fill the cap quickly", rtc::LS_INFO);
+            sink.OnLogMessage("a log line that is long enough to fill the cap quickly " + std::to_string(i) + "\n", rtc::LS_INFO);
         }
-        sink.OnLogMessage("never written", rtc::LS_INFO);
+        sink.OnLogMessage("the very last line\n", rtc::LS_INFO);
         expect(sink.result().size() == 0, "a capped file log still keeps nothing in memory");
     }
     const auto contents = readFile(name.data());
-    expect(contents.size() < 4096 + 512, "a file log does not grow past its cap by more than one line and a marker");
-    expect(contents.find("log truncated") != std::string::npos, "a capped file log says it was truncated");
-    expect(contents.find("never written") == std::string::npos, "lines after the cap are dropped");
+    expect(contents.size() <= 4096 + 128, "a file log does not grow past its cap");
+    expect(contents.find("log head dropped") != std::string::npos, "a capped file log says its head was dropped");
+    expect(contents.find("the very last line") != std::string::npos, "the newest line survives the cap");
+    expect(contents.find("filling") == std::string::npos && contents.find(" 9999\n") != std::string::npos, "the last numbered line is kept");
+    expect(contents.find(" 0\n") == std::string::npos, "the oldest lines are dropped");
     unlink(name.data());
 }
 
-static void memoryLogStopsAtItsSizeCap() {
+static void memoryLogKeepsTheTailWithinItsSizeCap() {
     FilePath path;
     path.data = "/nonexistent-directory-for-tgcalls-test/log.txt";
     LogSinkImpl sink(path, 4096);
     for (int i = 0; i < 10000; i++) {
-        sink.OnLogMessage("a log line that is long enough to fill the cap quickly", rtc::LS_INFO);
+        sink.OnLogMessage("a log line that is long enough to fill the cap quickly " + std::to_string(i) + "\n", rtc::LS_INFO);
     }
-    expect(sink.result().size() < 4096 + 512, "the in-memory log is capped too");
+    sink.OnLogMessage("the very last line\n", rtc::LS_INFO);
+    const auto result = sink.result();
+    expect(result.size() <= 4096 + 128, "the in-memory log is capped too");
+    expect(result.find("the very last line") != std::string::npos, "the in-memory log keeps the newest line");
 }
 
 int main() {
-    fileLogStopsAtItsSizeCap();
-    memoryLogStopsAtItsSizeCap();
+    fileLogKeepsTheTailWithinItsSizeCap();
+    memoryLogKeepsTheTailWithinItsSizeCap();
     emptyPathKeepsNothing();
     filePathWritesLines();
     unopenablePathKeepsLines();
