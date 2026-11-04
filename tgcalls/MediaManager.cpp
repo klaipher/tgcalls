@@ -30,6 +30,7 @@
 
 #include "FieldTrialsConfig.h"
 #include "AudioCallPolicy.h"
+#include "SystemVoiceProcessingFallback.h"
 #include "CallsRuntimeSwitches.h"
 
 namespace tgcalls {
@@ -376,6 +377,14 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
         RTC_LOG(LS_WARNING) << "legacy call audio: software noise suppression "
             << (captureProcessing.softwareNoiseSuppression ? "on" : "off")
             << " (" << captureProcessing.reason << ")";
+        if (!captureProcessing.softwareNoiseSuppression) {
+            // The unit starts after these options were chosen; if it fails, this call takes the software stage back.
+            _noiseSuppressionFallback = std::make_unique<SoftwareNoiseSuppressionFallback>(
+                StaticThreads::getWorkerThread(),
+                _mediaEngine->voice().GetAudioState().get(),
+                "legacy call"
+            );
+        }
         audioOptions.audio_jitter_buffer_fast_accelerate = true;
 
         std::vector<std::string> streamIds;
@@ -516,6 +525,8 @@ MediaManager::~MediaManager() {
         _audioSendChannel.reset();
         _audioReceiveChannel.reset();
     });
+    // Waits for the worker thread, so it cannot run inside the blocks above.
+    _noiseSuppressionFallback.reset();
 
 	setSendVideo(nullptr);
 

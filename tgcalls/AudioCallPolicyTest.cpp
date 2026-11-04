@@ -65,27 +65,55 @@ void TestVoiceProcessingLatch() {
     CHECK_TRUE(!SystemVoiceProcessingLatch::failed());
 }
 
-// --- Field trial string ---
+// --- A voice-processing failure after the channel was created ---
 
-void TestFieldTrialFloorAppended() {
-    auto result = withOpusFirstLossFloor("A/Enabled/B/Enabled/", true);
-    CHECK_TRUE(result == "A/Enabled/B/Enabled/WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/");
+// The channel options are fixed before the audio unit starts. When the unit then fails, the call that
+// already dropped the software noise suppression has to get it back, not only the calls after it.
+void TestObserverIsToldOnTheFirstFailureOnly() {
+    SystemVoiceProcessingLatch::reset();
+    int told = 0;
+    int id = SystemVoiceProcessingLatch::addObserver([&]() { told++; });
+    CHECK_TRUE(told == 0);
+    SystemVoiceProcessingLatch::markFailed();
+    CHECK_TRUE(told == 1);
+    SystemVoiceProcessingLatch::markFailed();
+    CHECK_TRUE(told == 1);
+    SystemVoiceProcessingLatch::removeObserver(id);
+    SystemVoiceProcessingLatch::reset();
 }
 
-void TestFieldTrialFloorOffIsUnchanged() {
-    CHECK_TRUE(withOpusFirstLossFloor("A/Enabled/", false) == "A/Enabled/");
+void TestRemovedObserverIsNotTold() {
+    SystemVoiceProcessingLatch::reset();
+    int told = 0;
+    int id = SystemVoiceProcessingLatch::addObserver([&]() { told++; });
+    SystemVoiceProcessingLatch::removeObserver(id);
+    SystemVoiceProcessingLatch::markFailed();
+    CHECK_TRUE(told == 0);
+    SystemVoiceProcessingLatch::reset();
 }
 
-void TestFieldTrialFloorNotDuplicated() {
-    std::string base = "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/A/Enabled/";
-    CHECK_TRUE(withOpusFirstLossFloor(base, true) == base);
+// A failure that lands between choosing the options and registering must not be lost.
+void TestObserverAddedAfterAFailureIsToldAtOnce() {
+    SystemVoiceProcessingLatch::reset();
+    SystemVoiceProcessingLatch::markFailed();
+    int told = 0;
+    int id = SystemVoiceProcessingLatch::addObserver([&]() { told++; });
+    CHECK_TRUE(told == 1);
+    SystemVoiceProcessingLatch::removeObserver(id);
+    SystemVoiceProcessingLatch::reset();
 }
 
-void TestFieldTrialFloorKeepsTerminatingSlash() {
-    // InitFieldTrialsFromString needs every entry to end with '/'.
-    auto result = withOpusFirstLossFloor("A/Enabled", true);
-    CHECK_TRUE(result == "A/Enabled/WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/");
-    CHECK_TRUE(withOpusFirstLossFloor("", true) == "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/");
+void TestObserverMayRemoveItselfWhileBeingTold() {
+    SystemVoiceProcessingLatch::reset();
+    int told = 0;
+    int id = 0;
+    id = SystemVoiceProcessingLatch::addObserver([&]() {
+        told++;
+        SystemVoiceProcessingLatch::removeObserver(id);
+    });
+    SystemVoiceProcessingLatch::markFailed();
+    CHECK_TRUE(told == 1);
+    SystemVoiceProcessingLatch::reset();
 }
 
 // --- Audio session mode ---
@@ -147,29 +175,29 @@ void TestDuckingLevelValuesMatchAppleHeader() {
 // --- Process-wide switches: defaults and round trip ---
 
 void TestAudioSwitchDefaults() {
-    // A fresh process: only the encoder-local, interop-neutral changes are on.
+    // A fresh process: every audio change is off until it has been compared on a device.
     CHECK_TRUE(!CallsRuntimeSwitches::systemNoiseSuppression());
-    CHECK_TRUE(CallsRuntimeSwitches::advancedDucking());
-    CHECK_TRUE(CallsRuntimeSwitches::opusFirstLossFloor());
+    CHECK_TRUE(!CallsRuntimeSwitches::advancedDucking());
+    CHECK_TRUE(!CallsRuntimeSwitches::groupNarrowbandProcessing());
     CHECK_TRUE(!CallsRuntimeSwitches::keepSessionMode());
 }
 
 void TestAudioSwitchRoundTrip() {
     CallsRuntimeSwitches::setSystemNoiseSuppression(true);
-    CallsRuntimeSwitches::setAdvancedDucking(false);
-    CallsRuntimeSwitches::setOpusFirstLossFloor(false);
+    CallsRuntimeSwitches::setAdvancedDucking(true);
+    CallsRuntimeSwitches::setGroupNarrowbandProcessing(true);
     CallsRuntimeSwitches::setKeepSessionMode(true);
     CHECK_TRUE(CallsRuntimeSwitches::systemNoiseSuppression());
-    CHECK_TRUE(!CallsRuntimeSwitches::advancedDucking());
-    CHECK_TRUE(!CallsRuntimeSwitches::opusFirstLossFloor());
+    CHECK_TRUE(CallsRuntimeSwitches::advancedDucking());
+    CHECK_TRUE(CallsRuntimeSwitches::groupNarrowbandProcessing());
     CHECK_TRUE(CallsRuntimeSwitches::keepSessionMode());
     CallsRuntimeSwitches::setSystemNoiseSuppression(false);
-    CallsRuntimeSwitches::setAdvancedDucking(true);
-    CallsRuntimeSwitches::setOpusFirstLossFloor(true);
+    CallsRuntimeSwitches::setAdvancedDucking(false);
+    CallsRuntimeSwitches::setGroupNarrowbandProcessing(false);
     CallsRuntimeSwitches::setKeepSessionMode(false);
     CHECK_TRUE(!CallsRuntimeSwitches::systemNoiseSuppression());
-    CHECK_TRUE(CallsRuntimeSwitches::advancedDucking());
-    CHECK_TRUE(CallsRuntimeSwitches::opusFirstLossFloor());
+    CHECK_TRUE(!CallsRuntimeSwitches::advancedDucking());
+    CHECK_TRUE(!CallsRuntimeSwitches::groupNarrowbandProcessing());
     CHECK_TRUE(!CallsRuntimeSwitches::keepSessionMode());
 }
 
@@ -184,10 +212,10 @@ int main() {
     TestEarlierVoiceProcessingFailureKeepsSoftwareSuppression();
     TestSystemSuppressionDropsSoftwareNoiseSuppressionAndHighpass();
     TestVoiceProcessingLatch();
-    TestFieldTrialFloorAppended();
-    TestFieldTrialFloorOffIsUnchanged();
-    TestFieldTrialFloorNotDuplicated();
-    TestFieldTrialFloorKeepsTerminatingSlash();
+    TestObserverIsToldOnTheFirstFailureOnly();
+    TestRemovedObserverIsNotTold();
+    TestObserverAddedAfterAFailureIsToldAtOnce();
+    TestObserverMayRemoveItselfWhileBeingTold();
     TestModeKeptWhenSwitchOnAndCallModeActive();
     TestModeOverwrittenWhenSwitchOff();
     TestModeAppliedWhenCurrentIsNotACallMode();

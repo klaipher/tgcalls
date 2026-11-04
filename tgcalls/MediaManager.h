@@ -15,6 +15,7 @@
 #include "Message.h"
 #include "VideoCaptureInterface.h"
 #include "Stats.h"
+#include "SystemVoiceProcessingFallback.h"
 
 #include <functional>
 #include <memory>
@@ -160,6 +161,7 @@ private:
 	webrtc::LocalAudioSinkAdapter _audioSource;
 	webrtc::scoped_refptr<webrtc::AudioDeviceModule> _audioDeviceModule;
 	std::unique_ptr<cricket::VoiceMediaSendChannelInterface> _audioSendChannel;
+	std::unique_ptr<SoftwareNoiseSuppressionFallback> _noiseSuppressionFallback;
     std::unique_ptr<cricket::VoiceMediaReceiveChannelInterface> _audioReceiveChannel;
 	std::unique_ptr<cricket::VideoMediaSendChannelInterface> _videoSendChannel;
     bool _haveVideoSendChannel = false;

@@ -72,6 +72,7 @@
 #include "GroupJoinPayloadInternal.h"
 #include "FieldTrialsConfig.h"
 #include "AudioCallPolicy.h"
+#include "SystemVoiceProcessingFallback.h"
 #include "CallsRuntimeSwitches.h"
 
 #include "third-party/json11.hpp"
@@ -1928,6 +1929,7 @@ public:
     }
 
     void destroyOutgoingAudioChannel() {
+        _noiseSuppressionFallback.reset();
         if (!_outgoingAudioChannel) {
             return;
         }
@@ -1949,6 +1951,7 @@ public:
         }
 
         cricket::AudioOptions audioOptions;
+        bool dropsSoftwareNoiseSuppression = false;
         if (_disableOutgoingAudioProcessing || _videoContentType == VideoContentType::Screencast) {
             audioOptions.echo_cancellation = false;
             audioOptions.noise_suppression = false;
@@ -1974,6 +1977,7 @@ public:
             RTC_LOG(LS_WARNING) << "group call audio: software noise suppression "
                 << (processing.softwareNoiseSuppression ? "on" : "off")
                 << " (" << processing.reason << ")";
+            dropsSoftwareNoiseSuppression = !processing.softwareNoiseSuppression;
             //audioOptions.residual_echo_detector = true;
         }
 
@@ -1981,6 +1985,14 @@ public:
         streamIds.push_back("1");
 
         _outgoingAudioChannel = _channelManager->CreateVoiceChannel(_call.get(), cricket::MediaConfig(), "0", false, GroupNetworkManager::getDefaulCryptoOptions(), audioOptions);
+        if (dropsSoftwareNoiseSuppression) {
+            // The unit starts after these options were chosen; if it fails, this call takes the software stage back.
+            _noiseSuppressionFallback = std::make_unique<SoftwareNoiseSuppressionFallback>(
+                _threads->getWorkerThread(),
+                _channelManager->media_engine()->voice().GetAudioState().get(),
+                "group call"
+            );
+        }
         _threads->getNetworkThread()->BlockingCall([&]() {
             _outgoingAudioChannel->SetRtpTransport(_rtpTransport);
         });
@@ -3714,6 +3726,7 @@ private:
 
     // _outgoingAudioChannel memory is managed by _channelManager
     cricket::VoiceChannel *_outgoingAudioChannel = nullptr;
+    std::unique_ptr<SoftwareNoiseSuppressionFallback> _noiseSuppressionFallback;
     uint32_t _outgoingAudioSsrc = 0;
 
     std::vector<webrtc::SdpVideoFormat> _availableVideoFormats;

@@ -1,4 +1,5 @@
 #include "group/GroupAudioCapturePostProcessor.h"
+#include "CallsRuntimeSwitches.h"
 
 #include "modules/audio_processing/audio_buffer.h"
 
@@ -166,7 +167,40 @@ static void noiseSuppressionOnDenoisesAt48kHz() {
     expect(std::fabs(harness.peak() - before * 0.5f) < 1.0f, "the denoised 48 kHz frame replaces the capture buffer");
 }
 
+// Group calls on 8/16 kHz capture (Bluetooth headsets) never used the denoised signal; keeping it is a new
+// audio path and sits behind a local switch. Off is today's behaviour: the capture buffer stays untouched.
+static void narrowbandResultIsDiscardedWithTheSwitchOff() {
+    tgcalls::CallsRuntimeSwitches::setGroupNarrowbandProcessing(false);
+    Harness harness(16000, true);
+    denoiseCalls = 0;
+    float before = 0.0f;
+    for (int frame = 0; frame < 50; frame++) {
+        harness.fill(8000.0f, frame);
+        before = harness.peak();
+        harness.process();
+    }
+    expect(denoiseCalls == 50, "narrowband: RNNoise still feeds the speech detector with the switch off");
+    expect(std::fabs(harness.peak() - before) < 1.0f, "narrowband: the capture buffer is untouched with the switch off");
+}
+
+static void narrowbandExternalSamplesAreNotMixedWithTheSwitchOff() {
+    tgcalls::CallsRuntimeSwitches::setGroupNarrowbandProcessing(false);
+    std::vector<float> external;
+    webrtc::Mutex mutex;
+    Harness harness(16000, false, &external, &mutex);
+    for (int frame = 0; frame < 50; frame++) {
+        {
+            webrtc::MutexLock lock(&mutex);
+            external.assign(480, 4000.0f);
+        }
+        harness.fill(0.0f, frame);
+        harness.process();
+    }
+    expect(harness.peak() < 1.0f, "narrowband: external samples are not mixed in with the switch off");
+}
+
 static void noiseSuppressionOnDenoisesAt16kHz() {
+    tgcalls::CallsRuntimeSwitches::setGroupNarrowbandProcessing(true);
     Harness harness(16000, true);
     denoiseCalls = 0;
     float before = 0.0f;
@@ -182,6 +216,7 @@ static void noiseSuppressionOnDenoisesAt16kHz() {
 static void externalSamplesReachTheCaptureBufferAt16kHz() {
     std::vector<float> external;
     webrtc::Mutex mutex;
+    tgcalls::CallsRuntimeSwitches::setGroupNarrowbandProcessing(true);
     Harness harness(16000, false, &external, &mutex);
     for (int frame = 0; frame < 50; frame++) {
         {
@@ -219,6 +254,8 @@ int main() {
     noiseSuppressionOffDetectsSpeechFromPeaks();
     peakSpeechDetectorFollowsTheNoiseFloor();
     noiseSuppressionOnDenoisesAt48kHz();
+    narrowbandResultIsDiscardedWithTheSwitchOff();
+    narrowbandExternalSamplesAreNotMixedWithTheSwitchOff();
     noiseSuppressionOnDenoisesAt16kHz();
     externalSamplesReachTheCaptureBufferAt16kHz();
     processingAllocatesNothingPerFrame();

@@ -57,6 +57,7 @@
 
 #include "FieldTrialsConfig.h"
 #include "AudioCallPolicy.h"
+#include "SystemVoiceProcessingFallback.h"
 #include "CallsRuntimeSwitches.h"
 
 #include "third-party/json11.hpp"
@@ -158,6 +159,7 @@ public:
             RTC_LOG(LS_WARNING) << "call audio: software noise suppression "
                 << (processing.softwareNoiseSuppression ? "on" : "off")
                 << " (" << processing.reason << ")";
+            _dropsSoftwareNoiseSuppression = !processing.softwareNoiseSuppression;
         }
 
         const auto contentId = std::to_string(_ssrc);
@@ -216,6 +218,15 @@ public:
             _outgoingAudioChannel->SetRemoteContent(incomingAudioDescription.get(), webrtc::SdpType::kAnswer, errorDesc);
         });
 
+        if (_dropsSoftwareNoiseSuppression) {
+            // The unit starts after these options were chosen; if it fails, this call takes the software stage back.
+            _noiseSuppressionFallback = std::make_unique<SoftwareNoiseSuppressionFallback>(
+                _threads->getWorkerThread(),
+                _channelManager->media_engine()->voice().GetAudioState().get(),
+                "call"
+            );
+        }
+
         setIsMuted(false);
     }
 
@@ -226,6 +237,7 @@ public:
         });
         _channelManager->DestroyChannel(_outgoingAudioChannel);
         _outgoingAudioChannel = nullptr;
+        _noiseSuppressionFallback.reset();
     }
 
     void setIsMuted(bool isMuted) {
@@ -272,6 +284,8 @@ private:
     ChannelManager *_channelManager = nullptr;
     webrtc::LocalAudioSinkAdapter *_audioSource = nullptr;
     cricket::VoiceChannel *_outgoingAudioChannel = nullptr;
+    bool _dropsSoftwareNoiseSuppression = false;
+    std::unique_ptr<SoftwareNoiseSuppressionFallback> _noiseSuppressionFallback;
 
     bool _isMuted = true;
 };
@@ -944,17 +958,12 @@ public:
     _initialInputDeviceId(std::move(descriptor.initialInputDeviceId)),
     _initialOutputDeviceId(std::move(descriptor.initialOutputDeviceId)),
     _videoCapture(descriptor.videoCapture) {
-        // InitFieldTrialsFromString keeps the pointer, so both variants are immutable statics and
-        // the switch only picks one of them.
-        static const std::string kBaseTrials =
+        webrtc::field_trial::InitFieldTrialsFromString(
             "WebRTC-DataChannel-Dcsctp/Enabled/"
             "WebRTC-Audio-MinimizeResamplingOnMobile/Enabled/"
             "WebRTC-Audio-iOS-Holding/Enabled/"
-            "WebRTC-IceFieldTrials/skip_relay_to_non_relay_connections:true/";
-        static const std::string kTrialsWithOpusFloor = withOpusFirstLossFloor(kBaseTrials, true);
-        const bool opusFloor = CallsRuntimeSwitches::opusFirstLossFloor();
-        RTC_LOG(LS_WARNING) << "call audio: Opus first-loss floor " << (opusFloor ? "on" : "off");
-        webrtc::field_trial::InitFieldTrialsFromString((opusFloor ? kTrialsWithOpusFloor : kBaseTrials).c_str());
+            "WebRTC-IceFieldTrials/skip_relay_to_non_relay_connections:true/"
+        );
         
         if (!descriptor.config.customParameters.empty()) {
             std::string parsingError;

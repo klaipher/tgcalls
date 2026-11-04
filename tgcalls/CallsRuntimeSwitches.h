@@ -48,21 +48,22 @@ public:
     }
 
     // The voice-processing unit ducks other audio only while speech is active, and by the smallest
-    // amount (iOS 17+). Local audio-unit configuration. Default on.
+    // amount (iOS 17+). Local audio-unit configuration. Default off: with other audio playing near full
+    // level the echo canceller has no reference for it, so it may reach the peer; needs a device A/B.
     static bool advancedDucking() {
-        return !flag(AdvancedDuckingDisabled).load(std::memory_order_relaxed);
+        return flag(AdvancedDucking).load(std::memory_order_relaxed);
     }
     static void setAdvancedDucking(bool value) {
-        flag(AdvancedDuckingDisabled).store(!value, std::memory_order_relaxed);
+        flag(AdvancedDucking).store(value, std::memory_order_relaxed);
     }
 
-    // The v2 1:1 Opus encoder starts with a 1% expected-loss floor, as the group and v1 engines
-    // already do. Encoder-local; the negotiated FEC parameter is untouched. Default on.
-    static bool opusFirstLossFloor() {
-        return !flag(OpusFirstLossFloorDisabled).load(std::memory_order_relaxed);
+    // Group calls on 8/16 kHz capture (Bluetooth headsets) keep the signal that went through RNNoise and
+    // the external-audio mix instead of discarding it. A new audio path on Bluetooth. Default off.
+    static bool groupNarrowbandProcessing() {
+        return flag(GroupNarrowbandProcessing).load(std::memory_order_relaxed);
     }
-    static void setOpusFirstLossFloor(bool value) {
-        flag(OpusFirstLossFloorDisabled).store(!value, std::memory_order_relaxed);
+    static void setGroupNarrowbandProcessing(bool value) {
+        flag(GroupNarrowbandProcessing).store(value, std::memory_order_relaxed);
     }
 
     // Starting the audio device no longer replaces the videoChat session mode of a video call with
@@ -120,14 +121,14 @@ private:
         return value;
     }
 
-    // Every flag is false at process start; the ones that default to "on" are stored inverted.
+    // Every flag is false at process start, and every one of them defaults to off.
     enum Flag {
         LivestreamHardwareDecoding,
         NativeCapturePath,
         EncoderLowLatency,
         SystemNoiseSuppression,
-        AdvancedDuckingDisabled,
-        OpusFirstLossFloorDisabled,
+        AdvancedDucking,
+        GroupNarrowbandProcessing,
         KeepSessionMode,
         ThreadQoS,
         ThermalVideoLadder,

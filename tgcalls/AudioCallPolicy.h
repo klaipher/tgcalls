@@ -2,7 +2,11 @@
 #define TGCALLS_AUDIO_CALL_POLICY_H
 
 #include <atomic>
+#include <functional>
+#include <map>
+#include <mutex>
 #include <string>
+#include <vector>
 
 namespace tgcalls {
 
@@ -32,18 +36,64 @@ struct CaptureProcessingChoice {
 class SystemVoiceProcessingLatch {
 public:
     static bool failed() {
-        return flag().load();
+        return state().failed.load();
     }
+
+    // Sets the latch and tells every registered observer, once per failure (the first call after a reset).
     static void markFailed() {
-        flag().store(true);
+        std::vector<std::function<void()>> toTell;
+        {
+            std::lock_guard<std::mutex> lock(state().mutex);
+            if (state().failed.exchange(true)) {
+                return;
+            }
+            for (const auto &entry : state().observers) {
+                toTell.push_back(entry.second);
+            }
+        }
+        for (const auto &observer : toTell) {
+            observer();
+        }
     }
+
     static void reset() {
-        flag().store(false);
+        state().failed.store(false);
+    }
+
+    // A call that dropped the software noise suppression relies on the system unit; this lets it take the
+    // software stage back on the live channel when the unit fails later. Runs on the thread that reports
+    // the failure (an audio-unit thread), so the observer must only post work. If the unit has failed
+    // already, the observer is told at once. Returns an id for removeObserver.
+    static int addObserver(std::function<void()> observer) {
+        bool tellNow = false;
+        int id = 0;
+        {
+            std::lock_guard<std::mutex> lock(state().mutex);
+            id = ++state().nextId;
+            state().observers[id] = observer;
+            tellNow = state().failed.load();
+        }
+        if (tellNow) {
+            observer();
+        }
+        return id;
+    }
+
+    static void removeObserver(int id) {
+        std::lock_guard<std::mutex> lock(state().mutex);
+        state().observers.erase(id);
     }
 
 private:
-    static std::atomic<bool> &flag() {
-        static std::atomic<bool> value{false};
+    struct State {
+        std::atomic<bool> failed{false};
+        std::mutex mutex;
+        std::map<int, std::function<void()>> observers;
+        int nextId = 0;
+    };
+
+    static State &state() {
+        static State value;
         return value;
     }
 };
@@ -69,24 +119,6 @@ inline CaptureProcessingChoice chooseCaptureProcessing(bool switchOn, bool isIos
         choice.reason = "system";
     }
     return choice;
-}
-
-// --- Opus first-loss floor --------------------------------------------------------------------
-
-// WebRTC's Opus encoder starts with an expected packet loss of 0 and only learns the real figure
-// from receiver reports, so the first seconds of a call on a lossy link have no FEC redundancy.
-// The field trial gives it a 1% floor. Encoder-local: the in-band FEC parameter that is
-// negotiated stays as it is. The v1 and group engines already enable it.
-inline std::string withOpusFirstLossFloor(std::string trials, bool enabled) {
-    static const char *const kTrial = "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/";
-    if (!enabled || trials.find(kTrial) != std::string::npos) {
-        return trials;
-    }
-    if (!trials.empty() && trials.back() != '/') {
-        trials += '/';
-    }
-    trials += kTrial;
-    return trials;
 }
 
 // --- Audio session mode -----------------------------------------------------------------------
