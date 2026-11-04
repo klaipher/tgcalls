@@ -500,9 +500,12 @@ public:
     void updateDecoderState(
         AVCodecParameters const *codecParameters,
         AVRational pktTimebase,
-        std::string const &endpointId
+        std::string const &endpointId,
+        bool partStarting
     ) {
-        if (_skippedParts.consumeFlushNeeded() && _decoderState) {
+        // Parts that went by while nobody watched left the decoder with references from before the gap. Only
+        // flushed when a part starts: a part resumed in its middle needs the references it already has.
+        if (_skippedParts.consumeFlushNeededAtPartStart(partStarting) && _decoderState) {
             _decoderState->reset();
         }
         if (_decoderState && _decoderState->supportsDecoding(codecParameters, pktTimebase)) {
@@ -762,7 +765,9 @@ public:
             return {};
         }
         
-        sharedState->impl()->updateDecoderState(_videoCodecParameters, _videoStream->time_base, _endpointId);
+        const bool partStarting = !_decodeStarted;
+        _decodeStarted = true;
+        sharedState->impl()->updateDecoderState(_videoCodecParameters, _videoStream->time_base, _endpointId, partStarting);
 
         while (true) {
             if (_didReadToEnd) {
@@ -848,6 +853,8 @@ private:
     int _frameIndex = 0;
     double _firstFramePts = -1.0;
     bool _didReadToEnd = false;
+    // Set by the first getNextFrame: a skipped-part flush is only taken before the first packet of a part.
+    bool _decodeStarted = false;
 };
 
 class VideoStreamingPartState {

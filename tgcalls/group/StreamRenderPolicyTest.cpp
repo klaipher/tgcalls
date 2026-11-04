@@ -113,11 +113,28 @@ void TestSkippedPartFlushesTheDecoderOnce() {
     CHECK_TRUE(flag.consumeFlushNeeded());
 }
 
+// A tile hidden and shown again inside one part still has that part's references in the decoder. Flushing
+// there would make the decoder drop every frame up to the next keyframe (FFmpeg outputs nothing until it
+// recovers), so the rest of the part would be read in one call with nothing shown. The flush waits for the
+// next part to start (parts start on a keyframe).
+void TestSkippedPartFlushWaitsForThePartStart() {
+    SkippedPartFlag flag;
+    CHECK_TRUE(!flag.consumeFlushNeededAtPartStart(true));
+    flag.noteSkipped();
+    CHECK_TRUE(!flag.consumeFlushNeededAtPartStart(false));
+    CHECK_TRUE(!flag.consumeFlushNeededAtPartStart(false));
+    CHECK_TRUE(flag.consumeFlushNeededAtPartStart(true));
+    CHECK_TRUE(!flag.consumeFlushNeededAtPartStart(true));
+    flag.noteSkipped();
+    CHECK_TRUE(flag.consumeFlushNeededAtPartStart(true));
+}
+
 } // namespace
 
 int main() {
     TestCatchUpIsBoundedPerTick();
     TestSkippedPartFlushesTheDecoderOnce();
+    TestSkippedPartFlushWaitsForThePartStart();
     TestVideoTicksAtOneDisplayRefreshAtMost();
     TestAudioOnlyTicksSlowerThanVideo();
     TestTickNeverLetsTheAudioRingDrainBelowHalf();

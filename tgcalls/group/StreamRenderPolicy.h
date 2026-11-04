@@ -80,6 +80,16 @@ public:
         return result;
     }
 
+    // The flush is taken only when a part starts decoding. A part resumed in its middle still has its own
+    // references in the decoder: flushing then makes the decoder drop every frame up to the next keyframe, so
+    // the rest of the part is read in one call with nothing shown. The flag then waits for the next part.
+    bool consumeFlushNeededAtPartStart(bool partStarting) {
+        if (!partStarting) {
+            return false;
+        }
+        return consumeFlushNeeded();
+    }
+
 private:
     bool _flushNeeded = false;
 };
