@@ -30,7 +30,11 @@
 #import "TGRTCScreenVideoRange.h"
 #include "TGRTCVideoRecovery.h"
 #include "TGCallsRuntimeOptions.h"
+#include "CallsRuntimeSwitches.h"
+#include "platform/darwin/EncoderModePolicy.h"
 #import "TGRTCPixelTransfer.h"
+
+#include <atomic>
 
 #include "common_video/h264/h264_bitstream_parser.h"
 
@@ -344,7 +348,14 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
   uint32_t _maxAllowedFrameRate;
   RTCH264PacketizationMode _packetizationMode;
   absl::optional<webrtc::H264ProfileLevelId> _profile_level_id;
+  // Low-latency rate control (Q6) and real-time mode; both false is the standard mode this encoder had before Q6.
+  bool _usesLowLatencyRateControl;
   bool _usesRealTimeEncoding;
+  bool _lowLatencyConfigurationFailed;
+  // A low-latency session that fails after it was created ends low-latency mode for the process; the output
+  // callback runs on a VideoToolbox thread, so it only asks the encode thread to rebuild.
+  tgcalls::LowLatencyFailureTracker _lowLatencyFailureTracker;
+  std::atomic<bool> _rebuildInStandardModeRequested;
   RTCVideoEncoderCallback _callback;
   int32_t _width;
   int32_t _height;
@@ -368,6 +379,7 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
   if (self = [super init]) {
     _codecInfo = codecInfo;
     _bitrateAdjuster.reset(new webrtc::BitrateAdjuster(.5, .95));
+    _rebuildInStandardModeRequested.store(false);
     _packetizationMode = RTCH264PacketizationModeNonInterleaved;
     _profile_level_id =
       webrtc::ParseSdpForH264ProfileLevelId([codecInfo nativeSdpVideoFormat].parameters);
@@ -421,6 +433,13 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
     return WEBRTC_VIDEO_CODEC_UNINITIALIZED;
   }
   BOOL isKeyframeRequired = NO;
+
+  if (_rebuildInStandardModeRequested.exchange(false)) {
+    // The latch is already set, so this builds the standard session.
+    RTC_LOG(LS_WARNING) << "H264 encoder: rebuilding in the standard mode after a low-latency encode error.";
+    [self resetCompressionSessionWithPixelFormat:[self pixelFormatOfFrame:frame]];
+    isKeyframeRequired = YES;
+  }
 
   // Get a pixel buffer from the pool and copy frame data over.
   if ([self resetCompressionSessionIfNeededWithFrame:frame]) {
@@ -548,6 +567,7 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
   if (status == kVTInvalidSessionErr) {
     // This error occurs when entering foreground after backgrounding the app.
     RTC_LOG(LS_ERROR) << "Invalid compression session, resetting.";
+    [self latchLowLatencyIfNeeded:tgcalls::EncodeFailureKind::SessionInvalid];
     [self resetCompressionSessionWithPixelFormat:[self pixelFormatOfFrame:frame]];
 
     return WEBRTC_VIDEO_CODEC_NO_OUTPUT;
@@ -555,6 +575,7 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
     // Sometimes the encoder malfunctions and needs to be restarted.
     RTC_LOG(LS_ERROR)
         << "Encountered video encoder malfunction error. Resetting compression session.";
+    [self latchLowLatencyIfNeeded:tgcalls::EncodeFailureKind::Malfunction];
     [self resetCompressionSessionWithPixelFormat:[self pixelFormatOfFrame:frame]];
 
     return WEBRTC_VIDEO_CODEC_NO_OUTPUT;
@@ -563,6 +584,16 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
   return WEBRTC_VIDEO_CODEC_OK;
+}
+
+// Ends low-latency mode for the process when the failed session ran in it, so the rebuild that follows is the
+// standard session instead of the same failing one.
+- (void)latchLowLatencyIfNeeded:(tgcalls::EncodeFailureKind)kind {
+  if (_lowLatencyFailureTracker.shouldFallBack(_usesLowLatencyRateControl, kind)) {
+    RTC_LOG(LS_WARNING) << "H264 encoder: low-latency session failed (" << static_cast<int>(kind)
+                        << "), using the standard mode from now on";
+    tgcalls::EncoderLowLatencyLatch::markFailed();
+  }
 }
 
 - (void)setCallback:(RTCVideoEncoderCallback)callback {
@@ -680,7 +711,16 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
     pixelFormat = nullptr;
   }
   CFMutableDictionaryRef encoder_specs = nullptr;
+  _usesLowLatencyRateControl = false;
+  _usesRealTimeEncoding = false;
+  _lowLatencyConfigurationFailed = false;
+  tgcalls::EncoderMode encoderMode;
 #if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
+  // Low-latency rate control is for the High profiles only. The switch (Debug Settings "calls.encoderLowLatency",
+  // on by default) and the process-wide latch of an earlier failure bring back the session this encoder built
+  // before Q6: standard rate control, no real-time mode.
+  encoderMode = tgcalls::chooseEncoderMode(tgcalls::CallsRuntimeSwitches::encoderLowLatency(), true);
+  const bool wantsLowLatency = encoderMode.lowLatency && TGRTCH264UsesLowLatencyRateControl(*_profile_level_id);
   // Currently hw accl is supported above 360p on mac, below 360p
   // the compression session will be created with hw accl disabled.
   encoder_specs = CFDictionaryCreateMutable(
@@ -688,8 +728,7 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
   CFDictionarySetValue(encoder_specs,
                        kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
                        kCFBooleanTrue);
-  bool lowLatencyRateControl = TGRTCH264UsesLowLatencyRateControl(*_profile_level_id);
-  if (lowLatencyRateControl) {
+  if (wantsLowLatency) {
     CFDictionarySetValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl, kCFBooleanTrue);
   }
 #endif
@@ -705,13 +744,23 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
                                  nullptr,
                                  &_compressionSession);
 #if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
-  if (status != noErr && lowLatencyRateControl) {
+  if (status != noErr && wantsLowLatency) {
+    // A device or profile that cannot do low-latency rate control gets the standard session, and no later
+    // session of this process tries again.
     RTC_LOG(LS_INFO) << "Low-latency rate control is unavailable, retrying without it: " << status;
+    tgcalls::EncoderLowLatencyLatch::markFailed();
     CFDictionaryRemoveValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl);
-    lowLatencyRateControl = false;
     status = VTCompressionSessionCreate(nullptr, _width, _height, kCMVideoCodecType_H264, encoder_specs, sourceAttributes, nullptr, compressionOutputCallback, nullptr, &_compressionSession);
+    encoderMode = tgcalls::chooseEncoderMode(false, true);
+    encoderMode.reason = "failed-earlier";
+  } else if (status == noErr && wantsLowLatency) {
+    _usesLowLatencyRateControl = true;
   }
-  _usesRealTimeEncoding = true;
+  // Real-time mode went in with low-latency rate control (Q6) and applies to every Mac H.264 session of a
+  // chosen low-latency mode, even for profiles that do not use it; the standard mode keeps the old false.
+  _usesRealTimeEncoding = encoderMode.realTime;
+  RTC_LOG(LS_INFO) << "H264 encoder: " << (_usesLowLatencyRateControl ? "low-latency rate control, real-time" : (_usesRealTimeEncoding ? "real-time, standard rate control" : "standard mode"))
+      << " (" << (_usesLowLatencyRateControl ? "ok" : encoderMode.reason) << ") " << _width << "x" << _height;
 #endif
   if (sourceAttributes) {
     CFRelease(sourceAttributes);
@@ -739,6 +788,14 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
 #endif
   [self configureCompressionSession];
 
+  if (_lowLatencyConfigurationFailed) {
+    // The negotiated profile could not be applied in low-latency mode: never send a stream that differs from
+    // what was negotiated. The latch makes the next attempt a standard session.
+    RTC_LOG(LS_WARNING) << "H264 encoder: low-latency session rejected the negotiated profile, rebuilding in the standard mode";
+    tgcalls::EncoderLowLatencyLatch::markFailed();
+    return [self resetCompressionSessionWithPixelFormat:framePixelFormat];
+  }
+
   // The pixel buffer pool is dependent on the compression session so if the session is reset, the
   // pool should be reset as well.
   _pixelBufferPool = VTCompressionSessionGetPixelBufferPool(_compressionSession);
@@ -749,9 +806,18 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
 - (void)configureCompressionSession {
   RTC_DCHECK(_compressionSession);
   SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_RealTime, _usesRealTimeEncoding);
-  SetVTSessionProperty(_compressionSession,
-                       kVTCompressionPropertyKey_ProfileLevel,
-                       ExtractProfile(*_profile_level_id));
+  if (_usesLowLatencyRateControl) {
+    OSStatus profileStatus = VTSessionSetProperty(_compressionSession,
+                                                  kVTCompressionPropertyKey_ProfileLevel,
+                                                  ExtractProfile(*_profile_level_id));
+    if (profileStatus != noErr) {
+      _lowLatencyConfigurationFailed = true;
+    }
+  } else {
+    SetVTSessionProperty(_compressionSession,
+                         kVTCompressionPropertyKey_ProfileLevel,
+                         ExtractProfile(*_profile_level_id));
+  }
   SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_AllowFrameReordering, false);
   [self setEncoderBitrateBps:_targetBitrateBps frameRate:_encoderFrameRate];
   // TODO(tkchin): Look at entropy mode and colorspace matrices.
@@ -844,8 +910,13 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
                rotation:(RTCVideoRotation)rotation {
   if (status != noErr) {
     RTC_LOG(LS_ERROR) << "H264 encode failed with code: " << status;
+    [self latchLowLatencyIfNeeded:tgcalls::EncodeFailureKind::AsyncEncodeError];
+    if (tgcalls::EncoderLowLatencyLatch::failed() && _usesLowLatencyRateControl) {
+      _rebuildInStandardModeRequested.store(true);
+    }
     return;
   }
+  _lowLatencyFailureTracker.frameWasEncoded();
   if (infoFlags & kVTEncodeInfo_FrameDropped) {
     RTC_LOG(LS_INFO) << "H264 encode dropped frame.";
     return;
