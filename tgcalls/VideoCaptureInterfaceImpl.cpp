@@ -145,6 +145,10 @@ void VideoCaptureInterfaceObject::setThermalLevel(int level) {
     updateAspectRateAdaptation();
 }
 
+void VideoCaptureInterfaceObject::reapplyOutputFormat() {
+    updateAspectRateAdaptation();
+}
+
 void VideoCaptureInterfaceObject::setPreferredAspectRatio(float aspectRatio) {
     _preferredAspectRatio = aspectRatio;
     updateAspectRateAdaptation();
@@ -226,6 +230,16 @@ void VideoCaptureInterfaceImpl::setThermalLevelForAll(int level) {
     std::unique_lock<std::mutex> lock(captureRegistryMutex());
     for (auto *capture : captureRegistry()) {
         capture->setThermalLevel(level);
+    }
+}
+
+// The ladder switch changed: every camera builds its output-format request again from the level it already has.
+void VideoCaptureInterfaceImpl::reapplyOutputFormatForAll() {
+    std::unique_lock<std::mutex> lock(captureRegistryMutex());
+    for (auto *capture : captureRegistry()) {
+        capture->_impl.perform([](VideoCaptureInterfaceObject *impl) {
+            impl->reapplyOutputFormat();
+        });
     }
 }
 

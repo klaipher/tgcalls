@@ -38,7 +38,7 @@
 
 + (void)setThermalVideoLadderEnabled:(BOOL)enabled {
     tgcalls::CallsRuntimeSwitches::setThermalVideoLadder(enabled);
-    tgcalls::VideoCaptureInterfaceImpl::setThermalLevelForAll(tgcalls::CallsRuntimeSwitches::thermalLevel());
+    tgcalls::VideoCaptureInterfaceImpl::reapplyOutputFormatForAll();
 }
 
 + (void)setThermalLevel:(NSInteger)level {

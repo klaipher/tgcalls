@@ -32,6 +32,7 @@ public:
     webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source();
     int getRotation();
     bool isScreenCapture();
+    void reapplyOutputFormat();
 
 private:
     void updateAspectRateAdaptation();
@@ -74,6 +75,8 @@ public:
     // Sets the thermal level (0..3) on every live capture interface and remembers it for the ones created later.
     // The level only limits the outgoing camera video while CallsRuntimeSwitches::thermalVideoLadder() is on.
     static void setThermalLevelForAll(int level);
+    // Builds the output-format request again on every live capture interface (after the ladder switch changed).
+    static void reapplyOutputFormatForAll();
 
 private:
 	ThreadLocalObject<VideoCaptureInterfaceObject> _impl;
