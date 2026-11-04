@@ -87,6 +87,9 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     AVCaptureDevice *_currentDevice;
     BOOL _hasRetriedOnFatalError;
     BOOL _isRunning;
+    AVCaptureDeviceFormat *_activeFormat;
+    NSInteger _baseCaptureFps;
+    int _maximumFrameRate;
 
 	// Live on RTCDispatcherTypeCaptureSession and main thread.
 	std::atomic<bool> _willBeRunning;
@@ -318,6 +321,44 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     _directSinks.push_back(directSink);
 }
 
+- (double)minSupportedFpsOfFormat:(AVCaptureDeviceFormat *)format {
+    double result = 1000.0;
+    for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
+        result = MIN(result, range.minFrameRate);
+    }
+    return result;
+}
+
+- (double)maxSupportedFpsOfFormat:(AVCaptureDeviceFormat *)format {
+    double result = 0.0;
+    for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
+        result = MAX(result, range.maxFrameRate);
+    }
+    return result;
+}
+
+- (void)setMaximumFrameRate:(int)fps {
+    [RTCDispatcher dispatchAsyncOnType:RTCDispatcherTypeCaptureSession block:^{
+        if (_maximumFrameRate == fps) {
+            return;
+        }
+        _maximumFrameRate = fps;
+        if (!_isRunning || !_currentDevice || !_activeFormat || _baseCaptureFps <= 0) {
+            // Applied when the capture starts.
+            return;
+        }
+        int target = fps > 0 ? tgcalls::chooseCaptureFps(fps, (int)_baseCaptureFps, [self minSupportedFpsOfFormat:_activeFormat], [self maxSupportedFpsOfFormat:_activeFormat]) : (int)_baseCaptureFps;
+        NSError *error = nil;
+        if (![_currentDevice lockForConfiguration:&error]) {
+            RTCLogError(@"Failed to lock device for a frame rate change. Error: %@", error.userInfo);
+            return;
+        }
+        [self updateDeviceCaptureFormat:_activeFormat fps:target];
+        [_currentDevice unlockForConfiguration];
+        RTC_LOG(LS_INFO) << "camera capture: frame rate " << target << " (cap " << fps << ", base " << (int)_baseCaptureFps << ")";
+    }];
+}
+
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
 	dispatch_async(self.frameQueue, ^{
 		_aspectRatio = aspectRatio;
@@ -355,6 +396,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
       // never changes path half way.
       bool nativeCapture = tgcalls::CallsRuntimeSwitches::nativeCapturePath();
       NSInteger captureFps = fps;
+      _activeFormat = format;
       if (nativeCapture) {
           double minSupportedFps = 1000.0;
           double maxSupportedFps = 0.0;
@@ -373,7 +415,8 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
       });
       _videoDataOutput.alwaysDiscardsLateVideoFrames = nativeCapture ? YES : NO;
       [self reconfigureCaptureSessionInput];
-      [self updateDeviceCaptureFormat:format fps:captureFps];
+      _baseCaptureFps = captureFps;
+      [self updateDeviceCaptureFormat:format fps:(_maximumFrameRate > 0 ? tgcalls::chooseCaptureFps(_maximumFrameRate, (int)captureFps, [self minSupportedFpsOfFormat:format], [self maxSupportedFpsOfFormat:format]) : captureFps)];
       [self updateVideoDataOutputPixelFormat:format];
       [_captureSession startRunning];
       [_currentDevice unlockForConfiguration];
@@ -670,20 +713,24 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
             rtcPixelBuffer.shouldBeMirrored = usingFrontCamera;
             rtcPixelBuffer.deviceRelativeVideoRotation = deviceRelativeVideoRotation;
             
+            // Native frames keep the camera's buffer and the crop rectangle; the encoder crops once, into
+            // its IOSurface pool, instead of a per-frame CPU copy into an unpooled buffer here.
             CVPixelBufferRef outputPixelBufferRef = NULL;
-            OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
-            CVPixelBufferCreate(NULL, width, height, pixelFormat, NULL, &outputPixelBufferRef);
-            if (outputPixelBufferRef) {
-                int bufferSize = [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:width height:height];
-                if (_croppingBuffer.size() < bufferSize) {
-                    _croppingBuffer.resize(bufferSize);
+            if (tgcalls::planCameraCrop(plan, true) == tgcalls::CameraCropStrategy::CopyToNewBuffer) {
+                OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
+                CVPixelBufferCreate(NULL, width, height, pixelFormat, NULL, &outputPixelBufferRef);
+                if (outputPixelBufferRef) {
+                    int bufferSize = [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:width height:height];
+                    if (_croppingBuffer.size() < bufferSize) {
+                        _croppingBuffer.resize(bufferSize);
+                    }
+                    if ([rtcPixelBuffer cropAndScaleTo:outputPixelBufferRef withTempBuffer:_croppingBuffer.data()]) {
+                        rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
+                        rtcPixelBuffer.shouldBeMirrored = usingFrontCamera;
+                        rtcPixelBuffer.deviceRelativeVideoRotation = deviceRelativeVideoRotation;
+                    }
+                    CVPixelBufferRelease(outputPixelBufferRef);
                 }
-                if ([rtcPixelBuffer cropAndScaleTo:outputPixelBufferRef withTempBuffer:_croppingBuffer.data()]) {
-                    rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
-                    rtcPixelBuffer.shouldBeMirrored = usingFrontCamera;
-                    rtcPixelBuffer.deviceRelativeVideoRotation = deviceRelativeVideoRotation;
-                }
-                CVPixelBufferRelease(outputPixelBufferRef);
             }
         }
     }

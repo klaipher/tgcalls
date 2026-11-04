@@ -281,6 +281,14 @@
 #endif
 }
 
+- (void)setMaximumFrameRate:(int)fps {
+#ifdef WEBRTC_IOS
+    if (_videoCameraCapturer) {
+        [_videoCameraCapturer setMaximumFrameRate:fps];
+    }
+#endif
+}
+
 - (void)setIsEnabled:(bool)isEnabled {
 #ifdef WEBRTC_IOS
     if (_videoCameraCapturer) {
@@ -452,6 +460,16 @@ void VideoCapturerInterfaceImpl::setOnPause(std::function<void(bool)> pause) {
     });
 }
 
+
+void VideoCapturerInterfaceImpl::setMaximumFrameRate(int fps) {
+    VideoCapturerInterfaceImplHolder *implReference = _implReference;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (implReference.reference != nil) {
+            VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
+            [reference setMaximumFrameRate:fps];
+        }
+    });
+}
 
 int VideoCapturerInterfaceImpl::getRotation() {
     __block int value = 0;

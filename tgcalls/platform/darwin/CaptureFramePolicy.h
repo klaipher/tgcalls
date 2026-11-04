@@ -33,6 +33,21 @@ inline CaptureFramePlan planCameraFrame(bool paused, bool nativeEnabled, bool na
     return CaptureFramePlan::I420;
 }
 
+enum class CameraCropStrategy {
+    None,
+    // Today's path: the cropped region is copied into a new CVPixelBuffer.
+    CopyToNewBuffer,
+    // The frame keeps the camera's buffer and carries the crop rectangle; whoever consumes it crops once.
+    LeaveToEncoder
+};
+
+inline CameraCropStrategy planCameraCrop(CaptureFramePlan plan, bool cropActive) {
+    if (!cropActive || plan == CaptureFramePlan::Drop) {
+        return CameraCropStrategy::None;
+    }
+    return plan == CaptureFramePlan::Native ? CameraCropStrategy::LeaveToEncoder : CameraCropStrategy::CopyToNewBuffer;
+}
+
 // Holding camera buffers while the encoder works on them can starve the camera's small buffer
 // pool, which AVFoundation reports as dropped frames with reason "OutOfBuffers". A burst of them
 // latches the native path off for the rest of the capture, back to the I420 copy.

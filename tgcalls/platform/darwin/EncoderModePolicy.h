@@ -35,6 +35,45 @@ private:
     }
 };
 
+enum class EncodeFailureKind {
+    // kVTInvalidSessionErr: normal after the app returns from the background.
+    SessionInvalid,
+    // kVTVideoEncoderMalfunctionErr.
+    Malfunction,
+    // A failure reported by the output callback (status != noErr).
+    AsyncEncodeError,
+};
+
+// Decides whether a failure of a session that runs in low-latency mode must end low-latency mode for the
+// process (the next session is the standard one, today's behaviour) instead of rebuilding the same mode.
+// A malfunction or an asynchronous encode error is fatal at once. An invalid session is expected after a
+// background trip, so it only counts when it repeats without a single encoded frame in between.
+class LowLatencyFailureTracker {
+public:
+    static constexpr int kMaxInvalidSessionsInARow = 3;
+
+    bool shouldFallBack(bool usesLowLatency, EncodeFailureKind kind) {
+        if (!usesLowLatency) {
+            return false;
+        }
+        switch (kind) {
+        case EncodeFailureKind::Malfunction:
+        case EncodeFailureKind::AsyncEncodeError:
+            return true;
+        case EncodeFailureKind::SessionInvalid:
+            return _invalidInARow.fetch_add(1) + 1 >= kMaxInvalidSessionsInARow;
+        }
+        return false;
+    }
+
+    void frameWasEncoded() {
+        _invalidInARow.store(0);
+    }
+
+private:
+    std::atomic<int> _invalidInARow{0};
+};
+
 inline EncoderMode chooseEncoderMode(bool switchEnabled, bool osSupportsLowLatency) {
     EncoderMode mode;
     if (!switchEnabled) {

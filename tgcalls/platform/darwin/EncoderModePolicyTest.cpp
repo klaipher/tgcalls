@@ -55,9 +55,45 @@ void TestFailureLatchesToTodaysMode() {
     EncoderLowLatencyLatch::reset();
 }
 
+// A low-latency session that fails after it was created must not be rebuilt in the same mode forever.
+void TestLowLatencyMalfunctionFallsBack() {
+    LowLatencyFailureTracker tracker;
+    CHECK_TRUE(tracker.shouldFallBack(true, EncodeFailureKind::Malfunction));
+    CHECK_TRUE(tracker.shouldFallBack(true, EncodeFailureKind::AsyncEncodeError));
+}
+
+void TestStandardSessionNeverFallsBack() {
+    LowLatencyFailureTracker tracker;
+    CHECK_TRUE(!tracker.shouldFallBack(false, EncodeFailureKind::Malfunction));
+    CHECK_TRUE(!tracker.shouldFallBack(false, EncodeFailureKind::AsyncEncodeError));
+    for (int i = 0; i < 10; i++) {
+        CHECK_TRUE(!tracker.shouldFallBack(false, EncodeFailureKind::SessionInvalid));
+    }
+}
+
+void TestInvalidSessionIsTransientUntilItRepeats() {
+    LowLatencyFailureTracker tracker;
+    CHECK_TRUE(!tracker.shouldFallBack(true, EncodeFailureKind::SessionInvalid));
+    CHECK_TRUE(!tracker.shouldFallBack(true, EncodeFailureKind::SessionInvalid));
+    CHECK_TRUE(tracker.shouldFallBack(true, EncodeFailureKind::SessionInvalid));
+}
+
+void TestEncodedFrameClearsTheInvalidSessionCount() {
+    LowLatencyFailureTracker tracker;
+    for (int round = 0; round < 5; round++) {
+        CHECK_TRUE(!tracker.shouldFallBack(true, EncodeFailureKind::SessionInvalid));
+        CHECK_TRUE(!tracker.shouldFallBack(true, EncodeFailureKind::SessionInvalid));
+        tracker.frameWasEncoded();
+    }
+}
+
 } // namespace
 
 int main() {
+    TestLowLatencyMalfunctionFallsBack();
+    TestStandardSessionNeverFallsBack();
+    TestInvalidSessionIsTransientUntilItRepeats();
+    TestEncodedFrameClearsTheInvalidSessionCount();
     TestSwitchOffIsTodaysMode();
     TestUnsupportedOsIsTodaysMode();
     TestSwitchOnAndSupportedUsesLowLatencyWithRealTime();

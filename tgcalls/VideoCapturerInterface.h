@@ -31,6 +31,9 @@ public:
     virtual void setOnPause(std::function<void(bool)> pause) {
       // TODO: make this function pure virtual when everybody implements it.
     }
+    // Caps the camera's own frame rate (0 removes the cap). Used by the thermal ladder.
+    virtual void setMaximumFrameRate(int fps) {
+    }
     virtual void withNativeImplementation(std::function<void(void *)> completion) {
         completion(nullptr);
     }

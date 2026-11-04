@@ -12,6 +12,7 @@
 #import "TGRTCVideoEncoderH264.h"
 
 #import <VideoToolbox/VideoToolbox.h>
+#include <atomic>
 #include <vector>
 
 #if defined(WEBRTC_IOS)
@@ -340,6 +341,10 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
   bool _usesLowLatencyRateControl;
   bool _usesRealTimeEncoding;
   bool _lowLatencyConfigurationFailed;
+  // A low-latency session that fails after it was created ends low-latency mode for the process; the
+  // output callback runs on a VideoToolbox thread, so it only asks the encode thread to rebuild.
+  tgcalls::LowLatencyFailureTracker _lowLatencyFailureTracker;
+  std::atomic<bool> _rebuildInStandardModeRequested;
   RTCVideoEncoderCallback _callback;
   int32_t _width;
   int32_t _height;
@@ -415,6 +420,13 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
     return WEBRTC_VIDEO_CODEC_UNINITIALIZED;
   }
   BOOL isKeyframeRequired = NO;
+
+  if (_rebuildInStandardModeRequested.exchange(false)) {
+    // The latch is already set, so this builds the standard session.
+    RTC_LOG(LS_WARNING) << "H264 encoder: rebuilding in the standard mode after a low-latency encode error.";
+    [self resetCompressionSessionWithPixelFormat:[self pixelFormatOfFrame:frame]];
+    isKeyframeRequired = YES;
+  }
 
   // Get a pixel buffer from the pool and copy frame data over.
   if ([self resetCompressionSessionIfNeededWithFrame:frame]) {
@@ -517,6 +529,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
   if (status == kVTInvalidSessionErr) {
     // This error occurs when entering foreground after backgrounding the app.
     RTC_LOG(LS_ERROR) << "Invalid compression session, resetting.";
+    [self latchLowLatencyIfNeeded:tgcalls::EncodeFailureKind::SessionInvalid];
     [self resetCompressionSessionWithPixelFormat:[self pixelFormatOfFrame:frame]];
 
     return WEBRTC_VIDEO_CODEC_NO_OUTPUT;
@@ -524,6 +537,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
     // Sometimes the encoder malfunctions and needs to be restarted.
     RTC_LOG(LS_ERROR)
         << "Encountered video encoder malfunction error. Resetting compression session.";
+    [self latchLowLatencyIfNeeded:tgcalls::EncodeFailureKind::Malfunction];
     [self resetCompressionSessionWithPixelFormat:[self pixelFormatOfFrame:frame]];
 
     return WEBRTC_VIDEO_CODEC_NO_OUTPUT;
@@ -532,6 +546,18 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
   return WEBRTC_VIDEO_CODEC_OK;
+}
+
+// Ends low-latency mode for the process when the failed session ran in it, so the rebuild that follows
+// is the standard session instead of the same failing one.
+- (void)latchLowLatencyIfNeeded:(tgcalls::EncodeFailureKind)kind {
+#if defined(WEBRTC_IOS)
+  if (_lowLatencyFailureTracker.shouldFallBack(_usesLowLatencyRateControl, kind)) {
+    RTC_LOG(LS_WARNING) << "H264 encoder: low-latency session failed (" << static_cast<int>(kind)
+                        << "), using the standard mode from now on";
+    tgcalls::EncoderLowLatencyLatch::markFailed();
+  }
+#endif
 }
 
 - (void)setCallback:(RTCVideoEncoderCallback)callback {
@@ -853,8 +879,13 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
                rotation:(RTCVideoRotation)rotation {
   if (status != noErr) {
     RTC_LOG(LS_ERROR) << "H264 encode failed with code: " << status;
+    [self latchLowLatencyIfNeeded:tgcalls::EncodeFailureKind::AsyncEncodeError];
+    if (tgcalls::EncoderLowLatencyLatch::failed() && _usesLowLatencyRateControl) {
+      _rebuildInStandardModeRequested.store(true);
+    }
     return;
   }
+  _lowLatencyFailureTracker.frameWasEncoded();
   if (infoFlags & kVTEncodeInfo_FrameDropped) {
     RTC_LOG(LS_INFO) << "H264 encode dropped frame.";
     return;

@@ -21,6 +21,8 @@
 - (void)startCaptureWithDevice:(AVCaptureDevice *)device format:(AVCaptureDeviceFormat *)format fps:(NSInteger)fps;
 - (void)stopCapture;
 - (void)setIsEnabled:(bool)isEnabled;
+// Caps the camera frame rate at the active format (0 removes the cap again).
+- (void)setMaximumFrameRate:(int)fps;
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio;
 - (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink;
 - (int)getRotation;

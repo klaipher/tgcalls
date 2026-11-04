@@ -111,6 +111,9 @@ void VideoCaptureInterfaceObject::setState(VideoState state) {
 void VideoCaptureInterfaceObject::applyOutputFormat(int width, int height) {
     const auto format = videoLadderFormat(_thermalLevel, width, height, CallsRuntimeSwitches::thermalVideoLadder() && !_isScreenCapture);
     PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, format.width, format.height, format.fps);
+    if (_videoCapturer) {
+        _videoCapturer->setMaximumFrameRate(thermalCameraFpsCap(_thermalLevel, CallsRuntimeSwitches::thermalVideoLadder() && !_isScreenCapture));
+    }
 }
 
 void VideoCaptureInterfaceObject::setThermalLevel(int level) {

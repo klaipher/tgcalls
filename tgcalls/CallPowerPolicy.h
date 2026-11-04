@@ -57,6 +57,16 @@ inline VideoLadderFormat videoLadderFormat(int level, int width, int height, boo
     return result;
 }
 
+// The frame rate the camera itself should run at for a thermal level; 0 means no cap (the rate the
+// capture started with). Lowering the rate at the source saves the camera and its image processing, not
+// just the encode, and avoids the uneven frame drops of an adapter working from a faster source.
+inline int thermalCameraFpsCap(int level, bool enabled) {
+    if (!enabled || level < 2) {
+        return 0;
+    }
+    return videoLadderFormat(level, 1280, 720, true).fps;
+}
+
 // Engine thread quality of service.
 enum class EngineThreadRole {
     Network,

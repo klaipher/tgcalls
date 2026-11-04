@@ -25,6 +25,23 @@ void TestNominalAndElevatedLeaveTheFormatAlone() {
     }
 }
 
+// The ladder used to lower only what the encoder is fed; the camera and its image processing kept
+// running at the full rate, which is the main heat source, and the adapter dropped every third frame
+// (30 to 20) unevenly. The camera itself is asked for the ladder's rate.
+void TestCameraRunsAtTheLadderRateFromHigh() {
+    CHECK_TRUE(thermalCameraFpsCap(0, true) == 0);
+    CHECK_TRUE(thermalCameraFpsCap(1, true) == 0);
+    CHECK_TRUE(thermalCameraFpsCap(2, true) == 20);
+    CHECK_TRUE(thermalCameraFpsCap(3, true) == 15);
+    CHECK_TRUE(thermalCameraFpsCap(3, true) == videoLadderFormat(3, 1280, 720, true).fps);
+}
+
+void TestCameraIsNotCappedWithTheSwitchOff() {
+    for (int level = 0; level <= 3; level++) {
+        CHECK_TRUE(thermalCameraFpsCap(level, false) == 0);
+    }
+}
+
 void TestHighCapsTheLongSideAndFrameRate() {
     const auto cap = videoLadderFormat(2, 1280, 720, true);
     CHECK_TRUE(cap.width == 640 && cap.height == 360);
@@ -128,6 +145,8 @@ void TestNewSwitchesRoundTrip() {
 } // namespace
 
 int main() {
+    TestCameraRunsAtTheLadderRateFromHigh();
+    TestCameraIsNotCappedWithTheSwitchOff();
     TestNominalAndElevatedLeaveTheFormatAlone();
     TestHighCapsTheLongSideAndFrameRate();
     TestCriticalGoesFurtherDown();

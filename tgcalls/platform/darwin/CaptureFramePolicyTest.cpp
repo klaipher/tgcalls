@@ -90,9 +90,30 @@ void TestCaptureFpsFallsBackToTheCurrentRate() {
     CHECK_TRUE(chooseCaptureFps(60, 30, 1.0, 120.0) == 30);
 }
 
+// With an aspect crop the I420 path copies the cropped region into a new buffer (today's behaviour). The
+// native path must not: that buffer is not IOSurface-backed and costs an allocation and a CPU copy per
+// frame, and the encoder would copy it again. The crop travels with the frame instead and the encoder
+// crops once, into its own IOSurface pool.
+void TestNativePathCropsInTheEncoderNotInTheCapturer() {
+    CHECK_TRUE(planCameraCrop(CaptureFramePlan::Native, true) == CameraCropStrategy::LeaveToEncoder);
+    CHECK_TRUE(planCameraCrop(CaptureFramePlan::Native, false) == CameraCropStrategy::None);
+}
+
+void TestI420PathKeepsItsCropCopy() {
+    CHECK_TRUE(planCameraCrop(CaptureFramePlan::I420, true) == CameraCropStrategy::CopyToNewBuffer);
+    CHECK_TRUE(planCameraCrop(CaptureFramePlan::I420, false) == CameraCropStrategy::None);
+}
+
+void TestDroppedFramesAreNeverCropped() {
+    CHECK_TRUE(planCameraCrop(CaptureFramePlan::Drop, true) == CameraCropStrategy::None);
+}
+
 } // namespace
 
 int main() {
+    TestNativePathCropsInTheEncoderNotInTheCapturer();
+    TestI420PathKeepsItsCropCopy();
+    TestDroppedFramesAreNeverCropped();
     TestPausedFramesAreDroppedBeforeAnyConversion();
     TestSwitchOffKeepsTheI420Path();
     TestNativeOnlyForBiPlanar420();
