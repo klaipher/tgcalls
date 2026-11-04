@@ -78,6 +78,11 @@ int main() {
     CHECK(!tgcalls::CallsRuntimeSwitches::threadQoS() && !tgcalls::CallsRuntimeSwitches::thermalVideoLadder());
     CHECK(!tgcalls::CallsRuntimeSwitches::incomingVideoDropped() && !tgcalls::CallsRuntimeSwitches::livestreamVideoSuspended());
     CHECK(tgcalls::CallsRuntimeSwitches::thermalLevel() == 0);
+    // Every switch defaults to off (today's behaviour); the group noise mode defaults to both suppressors.
+    CHECK(!tgcalls::CallsRuntimeSwitches::livestreamHardwareDecoding() && !tgcalls::CallsRuntimeSwitches::nativeCapturePath());
+    CHECK(!tgcalls::CallsRuntimeSwitches::systemNoiseSuppression() && !tgcalls::CallsRuntimeSwitches::advancedDucking());
+    CHECK(!tgcalls::CallsRuntimeSwitches::hardwareCrop() && !tgcalls::CallsRuntimeSwitches::nativeDecodeFormat());
+    CHECK(!tgcalls::CallsRuntimeSwitches::screencastHardwareEncoder() && tgcalls::CallsRuntimeSwitches::groupNoiseMode() == 0);
     tgcalls::CallsRuntimeSwitches::setThreadQoS(true);
     tgcalls::CallsRuntimeSwitches::setThermalVideoLadder(true);
     tgcalls::CallsRuntimeSwitches::setThermalLevel(2);

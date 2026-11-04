@@ -1,6 +1,8 @@
 #include "group/LivestreamDecodePolicy.h"
 
+#include <atomic>
 #include <cstdio>
+#include <thread>
 #include <set>
 #include <string>
 #include <vector>
@@ -227,6 +229,23 @@ void TestOutputBufferValidation() {
     CHECK_TRUE(!isAcceptableOutputBuffer(2, 8, false));
 }
 
+void TestConcurrentAcquisitionNeverExceedsTheLimit() {
+    HardwareDecodeSessionCounter contended(2);
+    std::atomic<int> acquired{0};
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 16; i++) {
+        threads.emplace_back([&]() {
+            if (contended.tryAcquire()) {
+                acquired++;
+            }
+        });
+    }
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    CHECK_TRUE(acquired.load() == 2 && contended.active() == 2);
+}
+
 void TestFailedStageIsRemembered() {
     LivestreamDecodeHealth health;
     CHECK_TRUE(health.onDecodeError(LivestreamDecodeMode::Software, LivestreamDecodeStage::Send) == LivestreamDecodeErrorAction::EndPart);
@@ -242,6 +261,7 @@ void TestFailedStageIsRemembered() {
 int main() {
     TestSmallStreamsStaySoftware();
     TestOutputBufferValidation();
+    TestConcurrentAcquisitionNeverExceedsTheLimit();
     TestFailedStageIsRemembered();
     TestEligibleStreams();
     TestIneligibleStreams();

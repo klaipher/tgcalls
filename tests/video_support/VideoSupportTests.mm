@@ -7,10 +7,7 @@
 
 #include "TGRTCVideoRecovery.h"
 #include "TGRTCVideoGeometry.h"
-#include "TGLivestreamDecode.h"
 #include "TGCameraFormatSelection.h"
-#include "TGCallsRuntimeOptions.h"
-#include "VideoDecodeFallback.h"
 #import "TGRTCPixelTransfer.h"
 
 static int failures = 0;
@@ -71,94 +68,6 @@ static void testGeometry() {
     expect(planeLength(0, 360) == 0, "zero stride");
     expect(planeLength(100, -1) == 0, "negative rows");
     expect(planeLength(65536, 65536) == 4294967296ull, "no 32-bit overflow");
-}
-
-static void testLivestreamEligibility() {
-    using namespace tgcalls::livestreamdecode;
-    StreamInfo info;
-    info.codec = Codec::H264;
-    info.width = 1280;
-    info.height = 720;
-    expect(isEligible(info), "720p H.264 is eligible");
-    info.codec = Codec::HEVC;
-    expect(isEligible(info), "720p 8-bit HEVC is eligible");
-    info.codec = Codec::Unknown;
-    expect(!isEligible(info), "unknown codec is not eligible");
-    info.codec = Codec::H264;
-    info.width = 426;
-    info.height = 240;
-    expect(!isEligible(info), "240p is not eligible");
-    info.width = 640;
-    info.height = 360;
-    expect(isEligible(info), "640x360 is the smallest eligible size");
-    info.width = 360;
-    info.height = 640;
-    expect(isEligible(info), "portrait 360x640 is eligible");
-    info.width = 8192;
-    info.height = 4320;
-    expect(!isEligible(info), "8K is not eligible");
-    info.width = 4096;
-    info.height = 2160;
-    expect(isEligible(info), "4096 wide is eligible");
-    info.width = 1920;
-    info.height = 1080;
-    info.progressive = false;
-    expect(!isEligible(info), "interlaced is not eligible");
-    info.progressive = true;
-    info.bitDepth = 10;
-    expect(!isEligible(info), "10-bit is not eligible");
-    info.bitDepth = 8;
-    info.chroma420 = false;
-    expect(!isEligible(info), "4:2:2 is not eligible");
-}
-
-static void testSessionCounter() {
-    using namespace tgcalls::livestreamdecode;
-    SessionCounter counter(2);
-    expect(counter.tryAcquire(), "first session acquired");
-    expect(counter.tryAcquire(), "second session acquired");
-    expect(!counter.tryAcquire(), "third session refused");
-    counter.release();
-    expect(counter.count() == 1, "release lowers the count");
-    expect(counter.tryAcquire(), "session available after release");
-    counter.release();
-    counter.release();
-    counter.release();
-    expect(counter.count() == 0, "release never goes below zero");
-
-    SessionCounter contended(2);
-    std::atomic<int> acquired{0};
-    std::vector<std::thread> threads;
-    for (int i = 0; i < 16; i++) {
-        threads.emplace_back([&]() {
-            if (contended.tryAcquire()) {
-                acquired++;
-            }
-        });
-    }
-    for (auto &thread : threads) {
-        thread.join();
-    }
-    expect(acquired.load() == 2 && contended.count() == 2, "concurrent acquisition never exceeds the limit");
-}
-
-static void testFallback() {
-    using namespace tgcalls;
-    VideoDecodeFallback fallback;
-    expect(!fallback.isSoftwareOnly(), "hardware decode is allowed at first");
-    expect(fallback.noteHardwareFailure(VideoDecodeStage::Receive), "first failure switches to software");
-    expect(fallback.isSoftwareOnly(), "software only after a failure");
-    expect(!fallback.noteHardwareFailure(VideoDecodeStage::Send), "second failure reports nothing new");
-    expect(fallback.failedStage() == VideoDecodeStage::Receive, "the first failing stage is kept");
-}
-
-static void testOutputBufferValidation() {
-    using namespace tgcalls::livestreamdecode;
-    expect(isAcceptableOutputBuffer(2, 8, true), "8-bit two-plane 4:2:0 is accepted");
-    expect(!isAcceptableOutputBuffer(2, 10, true), "10-bit is rejected");
-    expect(!isAcceptableOutputBuffer(3, 8, true), "three planes are rejected");
-    expect(!isAcceptableOutputBuffer(1, 8, true), "single plane is rejected");
-    expect(!isAcceptableOutputBuffer(2, 8, false), "4:2:2 is rejected");
 }
 
 static tgcalls::cameraformat::Candidate camera(int width, int height, double minFps, double maxFps, bool hdr = false, bool full = false) {
@@ -325,31 +234,17 @@ static void testPixelTransfer() {
     CVPixelBufferRelease(destination);
 }
 
-static void testRuntimeOptionDefaults() {
-    using tgcalls::RuntimeOptions;
-    expect(!RuntimeOptions::livestreamHardwareDecode().load(), "livestream hardware decode defaults off");
-    expect(RuntimeOptions::cameraFormatV2().load(), "camera format v2 defaults on");
-    expect(!RuntimeOptions::hardwareCrop().load(), "hardware crop defaults off");
-    expect(!RuntimeOptions::nativeDecodeFormat().load(), "native decode format defaults off");
-    expect(!RuntimeOptions::screencastHardwareEncoder().load(), "screencast hardware encoder defaults off");
-}
-
 int main() {
     @autoreleasepool {
         testResetLimiter();
         testBitrate();
         testDeadBand();
         testGeometry();
-        testLivestreamEligibility();
-        testSessionCounter();
-        testFallback();
-        testOutputBufferValidation();
         testCameraSelection();
         testFrameRateChoice();
         testCaptureFrameRateBounds();
         testCleanAperture();
         testPixelTransfer();
-        testRuntimeOptionDefaults();
     }
     if (failures > 0) {
         fprintf(stderr, "%d failures\n", failures);
