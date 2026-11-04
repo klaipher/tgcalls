@@ -486,7 +486,9 @@ void compressionOutputCallback(void* encoder,
       encoder_specs,
       kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
       kCFBooleanTrue);
-  bool lowLatencyRateControl = true;
+  // Off until it is measured (the calls plan keeps H.265 low-latency out on both apps): the H.265 encoder has no
+  // failure latch like the H.264 one, so a session that misbehaves after creation would not recover.
+  bool lowLatencyRateControl = false;
   if (lowLatencyRateControl) {
     CFDictionarySetValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl, kCFBooleanTrue);
   }
@@ -505,7 +507,7 @@ void compressionOutputCallback(void* encoder,
     lowLatencyRateControl = false;
     status = VTCompressionSessionCreate(nullptr, _width, _height, kCMVideoCodecType_HEVC, encoder_specs, sourceAttributes, nullptr, compressionOutputCallback, nullptr, &_compressionSession);
   }
-  _usesRealTimeEncoding = true;
+  _usesRealTimeEncoding = lowLatencyRateControl;
 #endif
   if (sourceAttributes) {
     CFRelease(sourceAttributes);

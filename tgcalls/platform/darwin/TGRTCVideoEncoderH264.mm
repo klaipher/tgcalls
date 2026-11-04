@@ -589,6 +589,8 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
+static_assert(kVTInvalidSessionErr == tgcalls::kStatusInvalidSession && kVTVideoEncoderMalfunctionErr == tgcalls::kStatusEncoderMalfunction, "EncoderModePolicy.h status constants must match VideoToolbox");
+
 // Ends low-latency mode for the process when the failed session ran in it, so the rebuild that follows is the
 // standard session instead of the same failing one.
 - (void)latchLowLatencyIfNeeded:(tgcalls::EncodeFailureKind)kind {
@@ -771,9 +773,9 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
   } else if (status == noErr && wantsLowLatency) {
     _usesLowLatencyRateControl = true;
   }
-  // Real-time mode went in with low-latency rate control (Q6) and applies to every Mac H.264 session of a
-  // chosen low-latency mode, even for profiles that do not use it; the standard mode keeps the old false.
-  _usesRealTimeEncoding = encoderMode.realTime;
+  // Real-time mode goes in with low-latency rate control (Q6) and only for a session that really has it; the
+  // standard mode and the profiles that do not use it keep the old false.
+  _usesRealTimeEncoding = tgcalls::shouldUseRealTime(encoderMode, _usesLowLatencyRateControl);
   RTC_LOG(LS_INFO) << "H264 encoder: " << (_usesLowLatencyRateControl ? "low-latency rate control, real-time" : (_usesRealTimeEncoding ? "real-time, standard rate control" : "standard mode"))
       << " (" << (_usesLowLatencyRateControl ? "ok" : encoderMode.reason) << ") " << _width << "x" << _height;
   if (sourceAttributes) {
@@ -924,7 +926,9 @@ static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId 
                rotation:(RTCVideoRotation)rotation {
   if (status != noErr) {
     RTC_LOG(LS_ERROR) << "H264 encode failed with code: " << status;
-    [self latchLowLatencyIfNeeded:tgcalls::EncodeFailureKind::AsyncEncodeError];
+    // kVTInvalidSessionErr also arrives here for the frames in flight when the app goes to the background; that
+    // is the transient kind (counted, not fatal at once).
+    [self latchLowLatencyIfNeeded:tgcalls::failureKindForCallbackStatus((int)status)];
     if (tgcalls::EncoderLowLatencyLatch::failed() && _usesLowLatencyRateControl) {
       _rebuildInStandardModeRequested.store(true);
     }

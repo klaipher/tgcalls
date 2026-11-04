@@ -74,6 +74,27 @@ private:
     std::atomic<int> _invalidInARow{0};
 };
 
+// The failure kind for the status an encode output callback reports. kVTInvalidSessionErr (-12903) is delivered
+// there too for the frames in flight when the app goes to the background, so it is the transient kind.
+constexpr int kStatusInvalidSession = -12903;
+constexpr int kStatusEncoderMalfunction = -12911;
+
+inline EncodeFailureKind failureKindForCallbackStatus(int status) {
+    if (status == kStatusInvalidSession) {
+        return EncodeFailureKind::SessionInvalid;
+    }
+    if (status == kStatusEncoderMalfunction) {
+        return EncodeFailureKind::Malfunction;
+    }
+    return EncodeFailureKind::AsyncEncodeError;
+}
+
+// Real-time mode only goes with a session that really got low-latency rate control; a profile that does not
+// use it, or a session that fell back, keeps the standard false.
+inline bool shouldUseRealTime(EncoderMode const &mode, bool sessionHasLowLatencyRateControl) {
+    return mode.realTime && sessionHasLowLatencyRateControl;
+}
+
 inline EncoderMode chooseEncoderMode(bool switchEnabled, bool osSupportsLowLatency) {
     EncoderMode mode;
     if (!switchEnabled) {
