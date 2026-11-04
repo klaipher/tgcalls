@@ -346,7 +346,7 @@ struct StateLogRecord {
     int64_t timestamp = 0;
     T record;
 
-    explicit StateLogRecord(int32_t timestamp_, T &&record_) :
+    explicit StateLogRecord(int64_t timestamp_, T &&record_) :
     timestamp(timestamp_),
     record(std::move(record_)) {
     }
