@@ -2,6 +2,8 @@
 
 #include "Instance.h"
 
+#include <cstdio>
+
 #ifdef WEBRTC_WIN
 #include "windows.h"
 #include <ctime>
@@ -62,11 +64,14 @@ void LogSinkImpl::OnLogMessage(const std::string &message) {
 #endif
 
 	if (!_discards) {
-		// 24 bytes for the timestamp prefix.
-		_writtenBytes += message.size() + 24;
-		if (_writtenBytes > _maxBytes) {
+		// 24 bytes for the timestamp prefix. A file log is two halves (the current file and `<path>.1`), so
+		// the current file turns over at half of the cap; the in-memory log drops its head at the whole cap.
+		const size_t added = message.size() + 24;
+		const size_t limit = _file.is_open() ? _maxBytes / 2 : _maxBytes;
+		if (_writtenBytes + added > limit) {
 			dropOldestHalf();
 		}
+		_writtenBytes += added;
 		auto &stream = _file.is_open() ? (std::ostream&)_file : _data;
 		stream
 			<< (timeinfo.tm_year + 1900)
@@ -84,36 +89,37 @@ void LogSinkImpl::OnLogMessage(const std::string &message) {
 #endif
 }
 
-// Keeps the newest half of the log, starting at a line, behind a marker; the log restarts at about half of the cap.
+// A file log turns over by rename (no read-back, no rewrite) because this runs inside WebRTC's global log lock:
+// the full file becomes `<path>.1` (replacing the previous one) and a new file starts with a marker, so the
+// newest `_maxBytes / 2` to `_maxBytes` of the log survive across the two files. The in-memory log keeps the
+// newest half from a line start behind the marker.
 void LogSinkImpl::dropOldestHalf() {
 	static const char *const marker = "log head dropped: older lines were removed to keep the log under its size limit\n";
-	const size_t keep = _maxBytes / 2;
-	std::string tail;
 	if (_file.is_open()) {
 		_file.flush();
-		std::ifstream reader(_path, std::ios::binary | std::ios::ate);
-		if (reader.is_open()) {
-			const std::streamoff size = reader.tellg();
-			const std::streamoff start = size > (std::streamoff)keep ? size - (std::streamoff)keep : 0;
-			reader.seekg(start);
-			tail.resize((size_t)(size - start));
-			reader.read(&tail[0], (std::streamsize)tail.size());
-			tail.resize((size_t)reader.gcount());
-		}
 		_file.close();
+		const std::string rotated = _path + ".1";
+		std::remove(rotated.c_str());
+		if (std::rename(_path.c_str(), rotated.c_str()) != 0) {
+			// Could not keep the old half: the new file below truncates it, which still bounds the size.
+		}
 		_file.open(_path, std::ios::out | std::ios::trunc);
-	} else {
-		const std::string all = _data.str();
-		tail = all.size() > keep ? all.substr(all.size() - keep) : all;
-		_data.str(std::string());
-		_data.clear();
+		if (_file.is_open()) {
+			_file << marker;
+			_writtenBytes = std::string(marker).size();
+			return;
+		}
 	}
+	const size_t keep = _maxBytes / 2;
+	const std::string all = _data.str();
+	std::string tail = all.size() > keep ? all.substr(all.size() - keep) : all;
+	_data.str(std::string());
+	_data.clear();
 	const auto lineStart = tail.find('\n');
 	if (lineStart != std::string::npos && tail.size() > keep / 2) {
 		tail.erase(0, lineStart + 1);
 	}
-	auto &stream = _file.is_open() ? (std::ostream&)_file : _data;
-	stream << marker << tail;
+	_data << marker << tail;
 	_writtenBytes = std::string(marker).size() + tail.size();
 }
 

@@ -98,12 +98,16 @@ static void fileLogKeepsTheTailWithinItsSizeCap() {
         expect(sink.result().size() == 0, "a capped file log still keeps nothing in memory");
     }
     const auto contents = readFile(name.data());
-    expect(contents.size() <= 4096 + 128, "a file log does not grow past its cap");
+    const auto rotated = readFile((std::string(name.data()) + ".1").c_str());
+    expect(contents.size() + rotated.size() <= 4096 + 256, "a file log and its rotated half do not grow past the cap");
+    expect(!rotated.empty() && rotated.find("log head dropped") != std::string::npos, "the previous half is kept in <path>.1");
+    expect(rotated.rfind(" 9999\n") == std::string::npos, "the rotated half holds older lines than the current file");
     expect(contents.find("log head dropped") != std::string::npos, "a capped file log says its head was dropped");
     expect(contents.find("the very last line") != std::string::npos, "the newest line survives the cap");
     expect(contents.find("filling") == std::string::npos && contents.find(" 9999\n") != std::string::npos, "the last numbered line is kept");
     expect(contents.find(" 0\n") == std::string::npos, "the oldest lines are dropped");
     unlink(name.data());
+    unlink((std::string(name.data()) + ".1").c_str());
 }
 
 static void memoryLogKeepsTheTailWithinItsSizeCap() {
