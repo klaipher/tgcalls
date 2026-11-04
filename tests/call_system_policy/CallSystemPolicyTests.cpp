@@ -3,8 +3,16 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <type_traits>
 
 using namespace tgcalls::systempolicy;
+
+// Thread priorities (QoS) were an experiment the owner removed: the engine threads keep the system default class.
+template <typename T, typename = void>
+struct HasThreadQoSSwitch : std::false_type {};
+template <typename T>
+struct HasThreadQoSSwitch<T, std::void_t<decltype(T::threadQoS())>> : std::true_type {};
+static_assert(!HasThreadQoSSwitch<tgcalls::CallsRuntimeSwitches>::value, "the thread QoS switch is removed");
 
 static int failures = 0;
 static int checks = 0;
@@ -62,12 +70,6 @@ int main() {
         CHECK(thermalCameraFpsCap(level, false) == 0);
     }
 
-    // Engine thread quality of service: off leaves the threads alone, on promotes all three roles.
-    for (auto role : {EngineThreadRole::Network, EngineThreadRole::Media, EngineThreadRole::Worker}) {
-        CHECK(engineThreadQos(role, false) == EngineThreadQos::Unchanged);
-        CHECK(engineThreadQos(role, true) == EngineThreadQos::UserInitiated);
-    }
-
     // Remote video is dropped locally only when nobody can see it.
     CHECK(shouldDropRemoteVideo(true, false));
     CHECK(!shouldDropRemoteVideo(false, false));
@@ -75,7 +77,7 @@ int main() {
     CHECK(!shouldDropRemoteVideo(false, true));
 
     // The runtime switches and the state the apps report.
-    CHECK(!tgcalls::CallsRuntimeSwitches::threadQoS() && !tgcalls::CallsRuntimeSwitches::thermalVideoLadder());
+    CHECK(!tgcalls::CallsRuntimeSwitches::thermalVideoLadder());
     CHECK(!tgcalls::CallsRuntimeSwitches::incomingVideoDropped() && !tgcalls::CallsRuntimeSwitches::livestreamVideoSuspended());
     CHECK(tgcalls::CallsRuntimeSwitches::thermalLevel() == 0);
     // Every switch defaults to off (today's behaviour); the group noise mode defaults to both suppressors.
@@ -83,20 +85,18 @@ int main() {
     CHECK(!tgcalls::CallsRuntimeSwitches::systemNoiseSuppression() && !tgcalls::CallsRuntimeSwitches::advancedDucking());
     CHECK(!tgcalls::CallsRuntimeSwitches::hardwareCrop() && !tgcalls::CallsRuntimeSwitches::nativeDecodeFormat());
     CHECK(!tgcalls::CallsRuntimeSwitches::screencastHardwareEncoder() && tgcalls::CallsRuntimeSwitches::groupNoiseMode() == 0);
-    tgcalls::CallsRuntimeSwitches::setThreadQoS(true);
     tgcalls::CallsRuntimeSwitches::setThermalVideoLadder(true);
     tgcalls::CallsRuntimeSwitches::setThermalLevel(2);
     tgcalls::CallsRuntimeSwitches::setIncomingVideoDropped(true);
     tgcalls::CallsRuntimeSwitches::setLivestreamVideoSuspended(true);
-    CHECK(tgcalls::CallsRuntimeSwitches::threadQoS() && tgcalls::CallsRuntimeSwitches::thermalVideoLadder());
+    CHECK(tgcalls::CallsRuntimeSwitches::thermalVideoLadder());
     CHECK(tgcalls::CallsRuntimeSwitches::thermalLevel() == 2);
     CHECK(tgcalls::CallsRuntimeSwitches::incomingVideoDropped() && tgcalls::CallsRuntimeSwitches::livestreamVideoSuspended());
-    tgcalls::CallsRuntimeSwitches::setThreadQoS(false);
     tgcalls::CallsRuntimeSwitches::setThermalVideoLadder(false);
     tgcalls::CallsRuntimeSwitches::setThermalLevel(0);
     tgcalls::CallsRuntimeSwitches::setIncomingVideoDropped(false);
     tgcalls::CallsRuntimeSwitches::setLivestreamVideoSuspended(false);
-    CHECK(!tgcalls::CallsRuntimeSwitches::threadQoS() && tgcalls::CallsRuntimeSwitches::thermalLevel() == 0);
+    CHECK(!tgcalls::CallsRuntimeSwitches::thermalVideoLadder() && tgcalls::CallsRuntimeSwitches::thermalLevel() == 0);
 
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

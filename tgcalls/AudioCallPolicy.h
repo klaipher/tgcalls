@@ -127,22 +127,6 @@ inline CaptureProcessingChoice chooseCaptureProcessing(bool switchOn, bool isIos
     return choice;
 }
 
-// --- Audio session mode -----------------------------------------------------------------------
-
-// The engine's audio-device start applies its own session configuration (mode voiceChat), which
-// replaces the mode the app's session manager chose for the call (videoChat for a video call).
-// A video call keeps videoChat (speaker-first routing, camera-aware tuning, like FaceTime): the engine's
-// default voiceChat never replaces a call mode that is already videoChat. A mode the caller asked for
-// explicitly (anything other than the default voiceChat) is always applied. Always on, no switch.
-inline std::string chooseAudioSessionMode(const std::string &configured, const std::string &current) {
-    static const char *const kVoiceChat = "AVAudioSessionModeVoiceChat";
-    static const char *const kVideoChat = "AVAudioSessionModeVideoChat";
-    if (configured == kVoiceChat && current == kVideoChat) {
-        return current;
-    }
-    return configured;
-}
-
 // --- Other-audio ducking of the voice-processing unit -----------------------------------------
 
 // Values of AUVoiceIOOtherAudioDuckingLevel.

@@ -106,26 +106,6 @@ inline int thermalCameraFpsCap(int level, bool enabled) {
     return videoLadderStep(std::min(3, level)).maxFps;
 }
 
-// Engine thread quality of service (CallsRuntimeSwitches::threadQoS, default off).
-enum class EngineThreadRole {
-    Network,
-    Media,
-    Worker
-};
-
-enum class EngineThreadQos {
-    // Leave the thread at the system default.
-    Unchanged,
-    UserInitiated
-};
-
-// The call threads move packets and frames on a deadline; with the switch on they are not queued behind
-// default-priority app work. Audio capture and playback run on the system's real-time threads and are not touched.
-inline EngineThreadQos engineThreadQos(EngineThreadRole role, bool enabled) {
-    (void)role;
-    return enabled ? EngineThreadQos::UserInitiated : EngineThreadQos::Unchanged;
-}
-
 // Remote video is dropped locally (never signalled to the peer) while the app is in the background and Picture in
 // Picture is not showing it. Always on.
 inline bool shouldDropRemoteVideo(bool appInBackground, bool pictureInPictureActive) {

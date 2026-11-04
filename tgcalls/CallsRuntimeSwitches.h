@@ -16,11 +16,12 @@ namespace tgcalls {
 // existed. Each switch carries a "remove after measuring" note: once the device measurement says it is
 // safe and useful, delete the switch and make the behaviour unconditional.
 //
-// Not in this class, on purpose:
-//  - the audio device workgroup switch lives in tg_owt (webrtc::AudioDeviceMacOptions), which tgcalls
-//    cannot include; the app bridge sets both.
-//  - runtime STATE the app reports (thermal level, incoming video dropped, livestream suspended) is
-//    kept here too, but it is not a user-facing switch.
+// Removed by the owner as experiments without a clear benefit (the behaviour from before stays): thread
+// priorities (QoS), the 32 kHz processing rate, the Opus complexity, the macOS audio workgroup and keeping
+// the videoChat audio session mode. Do not bring them back as switches.
+//
+// Runtime STATE the app reports (thermal level, incoming video dropped, livestream suspended) is kept here
+// too, but it is not a user-facing switch.
 class CallsRuntimeSwitches {
 public:
     // Livestream (broadcast) video decoded with VideoToolbox instead of FFmpeg's software decoders.
@@ -62,16 +63,6 @@ public:
     }
     static void setAdvancedDucking(bool value) {
         flag(AdvancedDucking).store(value, std::memory_order_relaxed);
-    }
-
-    // Engine threads (network, media, worker) run at a role-based quality of service. Applies live; "off"
-    // restores the default class. One mechanism for both apps (StaticThreads).
-    // Remove after measuring: Power Profiler, energy of a one hour call with and without.
-    static bool threadQoS() {
-        return flag(ThreadQoS).load(std::memory_order_relaxed);
-    }
-    static void setThreadQoS(bool value) {
-        flag(ThreadQoS).store(value, std::memory_order_relaxed);
     }
 
     // The thermal level (0 nominal ... 3 critical) set by the app lowers the size and frame rate of the
@@ -156,7 +147,6 @@ private:
         NativeCapturePath,
         SystemNoiseSuppression,
         AdvancedDucking,
-        ThreadQoS,
         ThermalVideoLadder,
         HardwareCrop,
         NativeDecodeFormat,

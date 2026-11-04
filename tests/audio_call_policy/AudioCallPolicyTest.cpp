@@ -116,28 +116,6 @@ void TestObserverMayRemoveItselfWhileBeingTold() {
     SystemVoiceProcessingLatch::reset();
 }
 
-// --- Audio session mode ---
-
-void TestModeKeptWhenCallModeActive() {
-    // ManagedAudioSession picked videoChat for a video call; the engine's default is voiceChat.
-    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVoiceChat", "AVAudioSessionModeVideoChat") == "AVAudioSessionModeVideoChat");
-}
-
-void TestModeAppliedWhenCurrentIsNotACallMode() {
-    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVoiceChat", "AVAudioSessionModeDefault") == "AVAudioSessionModeVoiceChat");
-    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVoiceChat", "AVAudioSessionModeMeasurement") == "AVAudioSessionModeVoiceChat");
-}
-
-void TestModeNeverChangesAnExplicitNonDefaultRequest() {
-    // Only the engine's own default (voiceChat) is replaceable; a caller asking for another mode gets it.
-    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVideoChat", "AVAudioSessionModeVoiceChat") == "AVAudioSessionModeVideoChat");
-    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeDefault", "AVAudioSessionModeVideoChat") == "AVAudioSessionModeDefault");
-}
-
-void TestModeUnchangedWhenAlreadyEqual() {
-    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVoiceChat", "AVAudioSessionModeVoiceChat") == "AVAudioSessionModeVoiceChat");
-}
-
 // --- Other-audio ducking ---
 
 void TestDuckingAppliedOnIos17WithSwitch() {
@@ -253,10 +231,6 @@ int main() {
     TestRemovedObserverIsNotTold();
     TestObserverAddedAfterAFailureIsToldAtOnce();
     TestObserverMayRemoveItselfWhileBeingTold();
-    TestModeKeptWhenCallModeActive();
-    TestModeAppliedWhenCurrentIsNotACallMode();
-    TestModeNeverChangesAnExplicitNonDefaultRequest();
-    TestModeUnchangedWhenAlreadyEqual();
     TestDuckingAppliedOnIos17WithSwitch();
     TestDuckingNotAppliedWithSwitchOff();
     TestDuckingNotAppliedBeforeIos17();

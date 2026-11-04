@@ -12,8 +12,6 @@
 #import "RTCAudioSessionConfiguration.h"
 
 #import "base/RTCLogging.h"
-#include "AudioCallPolicy.h"
-#include "CallsRuntimeSwitches.h"
 
 @implementation RTC_OBJC_TYPE (RTCAudioSession)
 (Configuration)
@@ -72,25 +70,14 @@
     }
   }
 
-  // The app's session manager may already have chosen videoChat for a video call; the engine's
-  // own default (voiceChat) must not replace it when the switch asks to keep it.
-  NSString *targetMode = configuration.mode;
-  if (self.mode != nil && targetMode != nil) {
-    targetMode = [NSString stringWithUTF8String:tgcalls::chooseAudioSessionMode(
-        std::string(targetMode.UTF8String),
-        std::string(self.mode.UTF8String)).c_str()];
-    if (![targetMode isEqualToString:configuration.mode]) {
-      RTCLog(@"Keeping audio session mode %@ instead of %@", targetMode, configuration.mode);
-    }
-  }
-  if (![self.mode isEqualToString:targetMode]) {
+  if (self.mode != configuration.mode) {
     NSError *modeError = nil;
-    if (![self setMode:targetMode error:&modeError]) {
+    if (![self setMode:configuration.mode error:&modeError]) {
       RTCLogError(@"Failed to set mode: %@",
                   modeError.localizedDescription);
       error = modeError;
     } else {
-      RTCLog(@"Set mode to: %@", targetMode);
+      RTCLog(@"Set mode to: %@", configuration.mode);
     }
   }
 
@@ -151,8 +138,7 @@
 
   if (self.isActive &&
       // TODO(tkchin): Figure out which category/mode numChannels is valid for.
-      ([self.mode isEqualToString:AVAudioSessionModeVoiceChat] ||
-       [self.mode isEqualToString:AVAudioSessionModeVideoChat])) {
+      [self.mode isEqualToString:AVAudioSessionModeVoiceChat]) {
     // Try to set the preferred number of hardware audio channels. These calls
     // must be done after setting the audio session’s category and mode and
     // activating the session.

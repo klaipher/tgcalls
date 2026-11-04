@@ -17,10 +17,6 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)setScreencastHardwareEncoderEnabled:(BOOL)enabled;
 // Group calls: 0 = both suppressors (default), 1 = WebRTC suppressor only, 2 = RNNoise only. Applies to the next call.
 + (void)setGroupNoiseMode:(NSInteger)mode;
-// Whether the macOS audio worker threads join the device's real-time workgroup (tg_owt). Applies to the next start.
-+ (void)setAudioWorkgroupEnabled:(BOOL)enabled;
-// Raises the tgcalls media, worker and network threads to a role-based QoS (false restores the default). Applies live.
-+ (void)setThreadQoSEnabled:(BOOL)enabled;
 // The thermal video ladder switch. Applies live: the current level is applied again to every camera.
 + (void)setThermalVideoLadderEnabled:(BOOL)enabled;
 // State the app reports. Level 0 nominal ... 3 critical (see CallSystemPolicy.h); only limits the camera while the ladder is on.

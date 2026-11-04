@@ -1,5 +1,5 @@
 #!/bin/sh
-# Header-only bookkeeping tests for tg_owt's macOS audio device options, plus a syntax
+# Header-only tests for tg_owt's macOS audio device options, plus a syntax
 # check of audio_device_mac.cc itself (no libraries needed).
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
