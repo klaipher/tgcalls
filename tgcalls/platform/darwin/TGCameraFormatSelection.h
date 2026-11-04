@@ -20,6 +20,10 @@ struct Candidate {
 
 constexpr double kTargetFps = 30.0;
 
+// The engine sends camera video at 25 fps at most (VideoCaptureInterfaceImpl::adaptToOutgoingLimit),
+// so capturing faster only produces frames that are dropped before encoding.
+constexpr double kCaptureFps = 25.0;
+
 inline bool supportsFps(Candidate const &candidate, double fps) {
     return candidate.minFps <= fps + 0.01 && candidate.maxFps >= fps - 0.01;
 }
@@ -120,6 +124,38 @@ inline FrameRateChoice chooseFrameRate(std::vector<FrameRateRange> const &ranges
         }
     }
     return result;
+}
+
+struct CaptureFrameRateBounds {
+    int rangeIndex = -1;
+    // Fastest allowed rate (shortest frame duration).
+    double fastestFps = 0.0;
+    // Slowest allowed rate (longest frame duration): the range's own slowest, so the camera
+    // can stretch exposure in low light instead of being locked to one rate.
+    double slowestFps = 0.0;
+};
+
+inline CaptureFrameRateBounds captureFrameRateBounds(std::vector<FrameRateRange> const &ranges) {
+    CaptureFrameRateBounds bounds;
+    auto choice = chooseFrameRate(ranges, kCaptureFps);
+    if (choice.rangeIndex < 0) {
+        return bounds;
+    }
+    auto const &range = ranges[choice.rangeIndex];
+    bounds.rangeIndex = choice.rangeIndex;
+    bounds.slowestFps = range.minFps;
+    switch (choice.kind) {
+        case FrameRateChoice::Kind::Target:
+            bounds.fastestFps = kCaptureFps;
+            break;
+        case FrameRateChoice::Kind::FastestOfRange:
+            bounds.fastestFps = range.maxFps;
+            break;
+        case FrameRateChoice::Kind::SlowestOfRange:
+            bounds.fastestFps = range.minFps;
+            break;
+    }
+    return bounds;
 }
 
 }

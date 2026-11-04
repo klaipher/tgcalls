@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <CoreVideo/CoreVideo.h>
 
+#include "CallSystemPolicy.h"
 #include <thread>
 #include <vector>
 
@@ -232,6 +233,24 @@ static void testFrameRateChoice() {
     expect(clampFps(1, 15) == 15 && clampFps(60, 120) == 60 && clampFps(1, 60) == 30, "clampFps clamps into the range");
 }
 
+static void testCaptureFrameRateBounds() {
+    using namespace tgcalls::cameraformat;
+    // The engine sends 25 fps (VideoCaptureInterfaceImpl adaptToOutgoingLimit); capture must not be faster.
+    expect(kCaptureFps == (double)tgcalls::systempolicy::kOutgoingCameraFps, "capture rate equals the fps the engine sends");
+    auto a = captureFrameRateBounds({ { 1, 30 } });
+    expect(a.rangeIndex == 0 && a.fastestFps == 25.0, "1-30 range captures at most 25 fps");
+    expect(a.slowestFps == 1.0, "the slowest rate stays the range's slowest so low light can stretch exposure");
+    auto b = captureFrameRateBounds({ { 24, 30 } });
+    expect(b.fastestFps == 25.0 && b.slowestFps == 24.0, "24-30 range keeps its own slowest rate");
+    auto c = captureFrameRateBounds({ { 30, 30 } });
+    expect(c.fastestFps == 30.0 && c.slowestFps == 30.0, "a fixed 30 fps range cannot go lower");
+    auto d = captureFrameRateBounds({ { 1, 15 } });
+    expect(d.fastestFps == 15.0 && d.slowestFps == 1.0, "a range below 25 fps uses its fastest rate");
+    auto e = captureFrameRateBounds({});
+    expect(e.rangeIndex == -1, "no ranges gives no bounds");
+    expect(a.slowestFps < a.fastestFps, "the camera is not locked to one frame duration");
+}
+
 static void testCleanAperture() {
     using namespace tgcalls::pixeltransfer;
     CleanAperture aperture;
@@ -327,6 +346,7 @@ int main() {
         testOutputBufferValidation();
         testCameraSelection();
         testFrameRateChoice();
+        testCaptureFrameRateBounds();
         testCleanAperture();
         testPixelTransfer();
         testRuntimeOptionDefaults();

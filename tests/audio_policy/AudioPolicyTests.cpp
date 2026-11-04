@@ -81,16 +81,22 @@ static void testMicGain() {
 
 static void testApmRate() {
     expect(maximumInternalProcessingRate(false, 32) == 48000, "switch off keeps 48 kHz");
-    expect(maximumInternalProcessingRate(true, 32) == 32000, "32 kbps with the switch on uses 32 kHz");
-    expect(maximumInternalProcessingRate(true, 40) == 32000, "40 kbps is still low");
-    expect(maximumInternalProcessingRate(true, 41) == 48000, "41 kbps keeps 48 kHz");
+    // Opus voice (mono) switches to fullband around 14 kbps, so 16-20 kHz reaches the listener above that.
+    expect(maximumInternalProcessingRate(true, 32) == 48000, "32 kbps keeps 48 kHz: the 16-20 kHz band is still sent");
+    expect(maximumInternalProcessingRate(true, 40) == 48000, "40 kbps keeps 48 kHz");
+    expect(maximumInternalProcessingRate(true, 14) == 48000, "14 kbps is already fullband and keeps 48 kHz");
+    expect(maximumInternalProcessingRate(true, 13) == 48000, "13 kbps keeps 48 kHz");
+    expect(maximumInternalProcessingRate(true, 12) == 32000, "12 kbps carries nothing above 16 kHz");
+    expect(maximumInternalProcessingRate(true, 8) == 32000, "8 kbps uses 32 kHz");
     expect(maximumInternalProcessingRate(true, 0) == 48000, "unknown bitrate keeps 48 kHz");
 
     webrtc::AudioProcessing::Config config;
     ApmPolicy policy;
     policy.lowBitrateRate = true;
     policy.opusBitrateKbps = 32;
-    expect(policy.changesConfig(), "rate policy changes the config");
+    expect(!policy.changesConfig(), "32 kbps (1:1 and group default) is not changed by the rate policy");
+    policy.opusBitrateKbps = 10;
+    expect(policy.changesConfig(), "rate policy changes the config at 10 kbps");
     applyApmPolicy(config, policy);
     expect(config.pipeline.maximum_internal_processing_rate == 32000, "config rate lowered");
     policy.opusBitrateKbps = 64;
@@ -104,7 +110,7 @@ static void testApmBuilderRoundTrip() {
     ApmPolicy policy;
     policy.micGain = MicGainMode::DigitalAgc2;
     policy.lowBitrateRate = true;
-    policy.opusBitrateKbps = 32;
+    policy.opusBitrateKbps = 10;
     applyApmPolicy(config, policy);
     auto apm = webrtc::AudioProcessingBuilder().SetConfig(config).Create();
     expect(apm != nullptr, "APM builds with the policy config");
@@ -127,7 +133,9 @@ static void testOpusComplexity() {
     const auto config = makeOpusConfig(format, 7);
     expect(config.has_value(), "opus config parses");
     if (config) {
-        expect(config->complexity == 7 && config->low_rate_complexity == 7, "both complexities set");
+        expect(config->complexity == 7, "complexity set");
+        const auto original = webrtc::AudioEncoderOpus::SdpToConfig(format);
+        expect(original && config->low_rate_complexity == original->low_rate_complexity, "low-rate complexity stays at the encoder default so bad networks keep their quality");
         expect(config->IsOk(), "config stays valid");
         expect(config->fec_enabled, "negotiated FEC preserved");
         expect(config->frame_size_ms == 60, "negotiated ptime preserved");

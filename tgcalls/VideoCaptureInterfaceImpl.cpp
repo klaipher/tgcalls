@@ -173,8 +173,8 @@ void VideoCaptureInterfaceObject::adaptToOutgoingLimit(int width, int height) {
     if (!_isScreenCapture) {
         currentOutgoingLimit(maxShortSide, maxFps);
     }
-    const auto size = systempolicy::limitOutgoingVideo(width, height, 25, maxShortSide, maxFps);
-    if (size.width != width || size.height != height || size.fps != 25) {
+    const auto size = systempolicy::limitOutgoingVideo(width, height, systempolicy::kOutgoingCameraFps, maxShortSide, maxFps);
+    if (size.width != width || size.height != height || size.fps != systempolicy::kOutgoingCameraFps) {
         RTC_LOG(LS_INFO) << "Outgoing camera video limited to " << size.width << "x" << size.height << " at " << size.fps << " fps";
     }
     PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, size.width, size.height, size.fps);

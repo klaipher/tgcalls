@@ -12,6 +12,9 @@
 namespace tgcalls {
 namespace systempolicy {
 
+// The outgoing camera frame rate the engine sends. The Mac camera capture rate is derived from it.
+constexpr int kOutgoingCameraFps = 25;
+
 // Cadence of the per-call stats sampling (signal bars and the end-of-call bitrate log). It was 1000 ms.
 constexpr int kStatsIntervalMs = 2000;
 

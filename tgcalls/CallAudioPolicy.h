@@ -95,10 +95,14 @@ inline bool analogAgcEnabled(MicGainMode mode) {
     return mode == MicGainMode::Legacy;
 }
 
-// A6. Below this Opus bitrate nothing above 16 kHz survives encoding, so the capture
-// chain can run at 32 kHz internally instead of 48 kHz.
+// A6. Opus voice in mono encodes fullband (up to 20 kHz) from about 14 kbps, so the 16-20 kHz
+// band reaches the listener at the 32 kbps both 1:1 and group calls use. Only at 12 kbps or
+// less does nothing above 16 kHz survive encoding; only then can the capture chain run at
+// 32 kHz internally instead of 48 kHz without a quality loss.
+constexpr int kLowBitrateRateMaxKbps = 12;
+
 inline int maximumInternalProcessingRate(bool lowBitrateRateEnabled, int opusBitrateKbps) {
-    if (lowBitrateRateEnabled && opusBitrateKbps > 0 && opusBitrateKbps <= 40) {
+    if (lowBitrateRateEnabled && opusBitrateKbps > 0 && opusBitrateKbps <= kLowBitrateRateMaxKbps) {
         return 32000;
     }
     return 48000;
@@ -139,8 +143,9 @@ inline std::optional<webrtc::AudioEncoderOpusConfig> makeOpusConfig(const webrtc
     webrtc::AudioEncoderOpusConfig config = *parsed;
     const int clamped = clampOpusComplexity(complexity);
     if (clamped != 0) {
+        // Only the normal complexity. low_rate_complexity applies below ~12.5 kbps (bad networks),
+        // where lowering it would cost voice quality when it is already tight.
         config.complexity = clamped;
-        config.low_rate_complexity = clamped;
     }
     return config;
 }

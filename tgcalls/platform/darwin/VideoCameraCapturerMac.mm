@@ -698,16 +698,18 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
             for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
                 ranges.push_back({ range.minFrameRate, range.maxFrameRate });
             }
-            auto choice = tgcalls::cameraformat::chooseFrameRate(ranges);
+            auto choice = tgcalls::cameraformat::chooseFrameRate(ranges, tgcalls::cameraformat::kCaptureFps);
             AVFrameRateRange *range = format.videoSupportedFrameRateRanges[choice.rangeIndex];
-            CMTime duration = CMTimeMake(1, (int32_t)tgcalls::cameraformat::kTargetFps);
+            CMTime duration = CMTimeMake(1, (int32_t)tgcalls::cameraformat::kCaptureFps);
             if (choice.kind == tgcalls::cameraformat::FrameRateChoice::Kind::SlowestOfRange) {
                 duration = range.maxFrameDuration;
             } else if (choice.kind == tgcalls::cameraformat::FrameRateChoice::Kind::FastestOfRange) {
                 duration = range.minFrameDuration;
             }
+            // Fastest rate is capped at what the engine sends; the slowest stays the range's own
+            // so auto exposure can still slow the camera down in low light.
             _currentDevice.activeVideoMinFrameDuration = duration;
-            _currentDevice.activeVideoMaxFrameDuration = duration;
+            _currentDevice.activeVideoMaxFrameDuration = range.maxFrameDuration;
             RTCLogInfo(@"Camera frame duration set to %lld/%d", duration.value, duration.timescale);
         } else if (format.videoSupportedFrameRateRanges.count > 0) {
             int target = 24;
