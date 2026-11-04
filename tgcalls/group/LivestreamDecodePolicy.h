@@ -36,6 +36,16 @@ struct LivestreamDecodeStreamInfo {
     bool progressive = true;
 };
 
+constexpr int kLivestreamDecodeMinWidth = 640;
+constexpr int kLivestreamDecodeMinHeight = 360;
+constexpr int kLivestreamDecodeMaxDimension = 4096;
+
+// The renderers draw 8-bit two-plane 4:2:0 pixel buffers only; anything else a hardware decoder
+// might hand back is refused and the stream continues in software.
+inline bool isAcceptableOutputBuffer(int planeCount, int bitsPerComponent, bool chroma420) {
+    return planeCount == 2 && bitsPerComponent == 8 && chroma420;
+}
+
 struct HardwareDecodeEligibility {
     bool eligible = false;
     // Stable token for logs: "ok", "codec", "pixel-format", "interlaced" or "size".
@@ -53,7 +63,13 @@ inline HardwareDecodeEligibility evaluateHardwareDecodeEligibility(LivestreamDec
     if (!info.progressive) {
         return { false, "interlaced" };
     }
-    if (info.width <= 0 || info.height <= 0 || info.width > 4096 || info.height > 4096) {
+    if (info.width <= 0 || info.height <= 0 || info.width > kLivestreamDecodeMaxDimension || info.height > kLivestreamDecodeMaxDimension) {
+        return { false, "size" };
+    }
+    // Small streams decode fast in software; a hardware session is a scarce system resource.
+    const int longSide = info.width > info.height ? info.width : info.height;
+    const int shortSide = info.width > info.height ? info.height : info.width;
+    if (longSide < kLivestreamDecodeMinWidth || shortSide < kLivestreamDecodeMinHeight) {
         return { false, "size" };
     }
     return { true, "ok" };
@@ -201,6 +217,14 @@ inline LivestreamDecodeDecision decideLivestreamDecodeMode(
     return decision;
 }
 
+// Where a hardware decode failed; only used for the log line.
+enum class LivestreamDecodeStage {
+    Open,
+    Send,
+    Receive,
+    FrameConversion
+};
+
 enum class LivestreamDecodeErrorAction {
     // Today's behaviour: the rest of the part is dropped, the next part starts clean.
     EndPart,
@@ -216,8 +240,15 @@ public:
         return _hardwareFailed;
     }
 
-    LivestreamDecodeErrorAction onDecodeError(LivestreamDecodeMode mode) {
+    LivestreamDecodeStage failedStage() const {
+        return _failedStage;
+    }
+
+    LivestreamDecodeErrorAction onDecodeError(LivestreamDecodeMode mode, LivestreamDecodeStage stage = LivestreamDecodeStage::Receive) {
         if (mode == LivestreamDecodeMode::Hardware) {
+            if (!_hardwareFailed) {
+                _failedStage = stage;
+            }
             _hardwareFailed = true;
             return LivestreamDecodeErrorAction::FallBackToSoftware;
         }
@@ -226,6 +257,7 @@ public:
 
 private:
     bool _hardwareFailed = false;
+    LivestreamDecodeStage _failedStage = LivestreamDecodeStage::Open;
 };
 
 // Endpoints whose decoder state can be released: not shown now and not referenced by a

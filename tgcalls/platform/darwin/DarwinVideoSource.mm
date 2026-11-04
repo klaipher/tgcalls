@@ -179,6 +179,7 @@ bool DarwinVideoTrackSource::OnCapturedFrame(const webrtc::VideoFrame& frame) {
                 .set_video_frame_buffer(buffer)
                 .set_rotation(rotation)
                 .set_timestamp_us(translated_timestamp_us)
+                .set_color_space(frame.color_space())
                 .build());
 
     return true;

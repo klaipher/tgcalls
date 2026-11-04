@@ -1,5 +1,4 @@
 #include "VideoCaptureInterfaceImpl.h"
-#include "CallPowerPolicy.h"
 #include "CallsRuntimeSwitches.h"
 
 #include "VideoCapturerInterface.h"
@@ -7,12 +6,32 @@
 #include "MediaManager.h"
 #include "platform/PlatformInterface.h"
 #include "StaticThreads.h"
+#include "CallSystemPolicy.h"
+
+#include <mutex>
+#include <vector>
+#include <algorithm>
 
 namespace tgcalls {
+
+namespace {
+
+std::mutex &captureRegistryMutex() {
+    static std::mutex value;
+    return value;
+}
+
+std::vector<VideoCaptureInterfaceImpl *> &captureRegistry() {
+    static std::vector<VideoCaptureInterfaceImpl *> value;
+    return value;
+}
+
+}
 
 VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::string deviceId, bool isScreenCapture, std::shared_ptr<PlatformContext> platformContext, Threads &threads)
 : _videoSource(PlatformInterface::SharedInstance()->makeVideoSource(threads.getMediaThread(), threads.getWorkerThread())) {
 	_platformContext = platformContext;
+    _thermalLevel = CallsRuntimeSwitches::thermalLevel();
 
 	switchToDevice(deviceId, isScreenCapture);
 }
@@ -109,22 +128,21 @@ void VideoCaptureInterfaceObject::setState(VideoState state) {
 
 // With the thermal ladder off this is the request the code always made: the given size at 25 fps.
 void VideoCaptureInterfaceObject::applyOutputFormat(int width, int height) {
-    const auto format = videoLadderFormat(_thermalLevel, width, height, CallsRuntimeSwitches::thermalVideoLadder() && !_isScreenCapture);
+    const auto format = systempolicy::videoLadderFormat(_thermalLevel, width, height, CallsRuntimeSwitches::thermalVideoLadder() && !_isScreenCapture);
     PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, format.width, format.height, format.fps);
     if (_videoCapturer) {
-        _videoCapturer->setMaximumFrameRate(thermalCameraFpsCap(_thermalLevel, CallsRuntimeSwitches::thermalVideoLadder() && !_isScreenCapture));
+        _videoCapturer->setMaximumFrameRate(systempolicy::thermalCameraFpsCap(_thermalLevel, CallsRuntimeSwitches::thermalVideoLadder() && !_isScreenCapture));
     }
 }
 
 void VideoCaptureInterfaceObject::setThermalLevel(int level) {
-    if (_thermalLevel == level) {
-        return;
-    }
     _thermalLevel = level;
     if (CallsRuntimeSwitches::thermalVideoLadder()) {
         RTC_LOG(LS_INFO) << "video: thermal level " << level << ", output format request updated";
-        updateAspectRateAdaptation();
     }
+    // Also applied when the switch is turned on later (setThermalVideoLadderEnabled below): the request is
+    // always rebuilt from the level, the switch only decides whether the level limits anything.
+    updateAspectRateAdaptation();
 }
 
 void VideoCaptureInterfaceObject::setPreferredAspectRatio(float aspectRatio) {
@@ -192,9 +210,24 @@ VideoCaptureInterfaceImpl::VideoCaptureInterfaceImpl(std::string deviceId, bool 
 _impl(threads->getMediaThread(), [deviceId, isScreenCapture, platformContext, threads]() {
 	return std::make_shared<VideoCaptureInterfaceObject>(deviceId, isScreenCapture, platformContext, *threads);
 }) {
+    std::unique_lock<std::mutex> lock(captureRegistryMutex());
+    captureRegistry().push_back(this);
 }
 
-VideoCaptureInterfaceImpl::~VideoCaptureInterfaceImpl() = default;
+VideoCaptureInterfaceImpl::~VideoCaptureInterfaceImpl() {
+    std::unique_lock<std::mutex> lock(captureRegistryMutex());
+    auto &registry = captureRegistry();
+    registry.erase(std::remove(registry.begin(), registry.end(), this), registry.end());
+}
+
+// One app call reaches every live capture interface (1:1 and group, any number of them).
+void VideoCaptureInterfaceImpl::setThermalLevelForAll(int level) {
+    CallsRuntimeSwitches::setThermalLevel(level);
+    std::unique_lock<std::mutex> lock(captureRegistryMutex());
+    for (auto *capture : captureRegistry()) {
+        capture->setThermalLevel(level);
+    }
+}
 
 void VideoCaptureInterfaceImpl::switchToDevice(std::string deviceId, bool isScreenCapture) {
 	_impl.perform([deviceId, isScreenCapture](VideoCaptureInterfaceObject *impl) {

@@ -118,28 +118,24 @@ void TestObserverMayRemoveItselfWhileBeingTold() {
 
 // --- Audio session mode ---
 
-void TestModeKeptWhenSwitchOnAndCallModeActive() {
+void TestModeKeptWhenCallModeActive() {
     // ManagedAudioSession picked videoChat for a video call; the engine's default is voiceChat.
-    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVoiceChat", "AVAudioSessionModeVideoChat", true) == "AVAudioSessionModeVideoChat");
-}
-
-void TestModeOverwrittenWhenSwitchOff() {
-    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVoiceChat", "AVAudioSessionModeVideoChat", false) == "AVAudioSessionModeVoiceChat");
+    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVoiceChat", "AVAudioSessionModeVideoChat") == "AVAudioSessionModeVideoChat");
 }
 
 void TestModeAppliedWhenCurrentIsNotACallMode() {
-    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVoiceChat", "AVAudioSessionModeDefault", true) == "AVAudioSessionModeVoiceChat");
-    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVoiceChat", "AVAudioSessionModeMeasurement", true) == "AVAudioSessionModeVoiceChat");
+    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVoiceChat", "AVAudioSessionModeDefault") == "AVAudioSessionModeVoiceChat");
+    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVoiceChat", "AVAudioSessionModeMeasurement") == "AVAudioSessionModeVoiceChat");
 }
 
 void TestModeNeverChangesAnExplicitNonDefaultRequest() {
     // Only the engine's own default (voiceChat) is replaceable; a caller asking for another mode gets it.
-    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVideoChat", "AVAudioSessionModeVoiceChat", true) == "AVAudioSessionModeVideoChat");
-    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeDefault", "AVAudioSessionModeVideoChat", true) == "AVAudioSessionModeDefault");
+    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVideoChat", "AVAudioSessionModeVoiceChat") == "AVAudioSessionModeVideoChat");
+    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeDefault", "AVAudioSessionModeVideoChat") == "AVAudioSessionModeDefault");
 }
 
 void TestModeUnchangedWhenAlreadyEqual() {
-    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVoiceChat", "AVAudioSessionModeVoiceChat", true) == "AVAudioSessionModeVoiceChat");
+    CHECK_TRUE(chooseAudioSessionMode("AVAudioSessionModeVoiceChat", "AVAudioSessionModeVoiceChat") == "AVAudioSessionModeVoiceChat");
 }
 
 // --- Other-audio ducking ---
@@ -178,32 +174,73 @@ void TestAudioSwitchDefaults() {
     // A fresh process: every audio change is off until it has been compared on a device.
     CHECK_TRUE(!CallsRuntimeSwitches::systemNoiseSuppression());
     CHECK_TRUE(!CallsRuntimeSwitches::advancedDucking());
-    CHECK_TRUE(!CallsRuntimeSwitches::groupNarrowbandProcessing());
-    CHECK_TRUE(!CallsRuntimeSwitches::keepSessionMode());
+    CHECK_TRUE(CallsRuntimeSwitches::groupNoiseMode() == 0);
 }
 
 void TestAudioSwitchRoundTrip() {
     CallsRuntimeSwitches::setSystemNoiseSuppression(true);
     CallsRuntimeSwitches::setAdvancedDucking(true);
-    CallsRuntimeSwitches::setGroupNarrowbandProcessing(true);
-    CallsRuntimeSwitches::setKeepSessionMode(true);
+    CallsRuntimeSwitches::setGroupNoiseMode(2);
     CHECK_TRUE(CallsRuntimeSwitches::systemNoiseSuppression());
     CHECK_TRUE(CallsRuntimeSwitches::advancedDucking());
-    CHECK_TRUE(CallsRuntimeSwitches::groupNarrowbandProcessing());
-    CHECK_TRUE(CallsRuntimeSwitches::keepSessionMode());
+    CHECK_TRUE(CallsRuntimeSwitches::groupNoiseMode() == 2);
+    CHECK_TRUE(audiopolicy::currentGroupNoiseMode() == audiopolicy::GroupNoiseMode::RNNoiseOnly);
     CallsRuntimeSwitches::setSystemNoiseSuppression(false);
     CallsRuntimeSwitches::setAdvancedDucking(false);
-    CallsRuntimeSwitches::setGroupNarrowbandProcessing(false);
-    CallsRuntimeSwitches::setKeepSessionMode(false);
+    CallsRuntimeSwitches::setGroupNoiseMode(0);
     CHECK_TRUE(!CallsRuntimeSwitches::systemNoiseSuppression());
     CHECK_TRUE(!CallsRuntimeSwitches::advancedDucking());
-    CHECK_TRUE(!CallsRuntimeSwitches::groupNarrowbandProcessing());
-    CHECK_TRUE(!CallsRuntimeSwitches::keepSessionMode());
+    CHECK_TRUE(CallsRuntimeSwitches::groupNoiseMode() == 0);
+}
+
+// --- Group noise mode (both apps) and microphone gain ---
+
+void TestNoiseModeParsing() {
+    using namespace audiopolicy;
+    CHECK_TRUE(groupNoiseModeFromInt(0) == GroupNoiseMode::Both);
+    CHECK_TRUE(groupNoiseModeFromInt(1) == GroupNoiseMode::ApmOnly);
+    CHECK_TRUE(groupNoiseModeFromInt(2) == GroupNoiseMode::RNNoiseOnly);
+    CHECK_TRUE(groupNoiseModeFromInt(-1) == GroupNoiseMode::Both);
+    CHECK_TRUE(groupNoiseModeFromInt(99) == GroupNoiseMode::Both);
+}
+
+void TestNoiseResolution() {
+    using namespace audiopolicy;
+    auto both = resolveGroupNoise(GroupNoiseMode::Both, true, true);
+    CHECK_TRUE(both.apmNoiseSuppression && both.rnnoise);
+    both = resolveGroupNoise(GroupNoiseMode::Both, false, true);
+    CHECK_TRUE(both.apmNoiseSuppression && !both.rnnoise);
+    both = resolveGroupNoise(GroupNoiseMode::Both, true, false);
+    CHECK_TRUE(!both.apmNoiseSuppression && both.rnnoise);
+    auto apm = resolveGroupNoise(GroupNoiseMode::ApmOnly, true, true);
+    CHECK_TRUE(apm.apmNoiseSuppression && !apm.rnnoise);
+    auto rn = resolveGroupNoise(GroupNoiseMode::RNNoiseOnly, true, true);
+    CHECK_TRUE(!rn.apmNoiseSuppression && rn.rnnoise);
+    // Turning suppression off never leaves the microphone without the WebRTC suppressor.
+    rn = resolveGroupNoise(GroupNoiseMode::RNNoiseOnly, false, true);
+    CHECK_TRUE(rn.apmNoiseSuppression && !rn.rnnoise);
+    rn = resolveGroupNoise(GroupNoiseMode::RNNoiseOnly, true, false);
+    CHECK_TRUE(!rn.apmNoiseSuppression && rn.rnnoise);
+}
+
+void TestMicGainAndHardwareMuteFollowThePlatform() {
+#if defined(__APPLE__) && TARGET_OS_OSX
+    CHECK_TRUE(audiopolicy::usesDigitalMicGain());
+    CHECK_TRUE(!audiopolicy::analogAgcEnabled());
+    CHECK_TRUE(!audiopolicy::shouldUseHardwareMicrophoneMute());
+#else
+    CHECK_TRUE(!audiopolicy::usesDigitalMicGain());
+    CHECK_TRUE(audiopolicy::analogAgcEnabled());
+    CHECK_TRUE(audiopolicy::shouldUseHardwareMicrophoneMute());
+#endif
 }
 
 } // namespace
 
 int main() {
+    TestNoiseModeParsing();
+    TestNoiseResolution();
+    TestMicGainAndHardwareMuteFollowThePlatform();
     TestAudioSwitchDefaults();
     TestAudioSwitchRoundTrip();
     TestSwitchOffKeepsSoftwareSuppression();
@@ -216,8 +253,7 @@ int main() {
     TestRemovedObserverIsNotTold();
     TestObserverAddedAfterAFailureIsToldAtOnce();
     TestObserverMayRemoveItselfWhileBeingTold();
-    TestModeKeptWhenSwitchOnAndCallModeActive();
-    TestModeOverwrittenWhenSwitchOff();
+    TestModeKeptWhenCallModeActive();
     TestModeAppliedWhenCurrentIsNotACallMode();
     TestModeNeverChangesAnExplicitNonDefaultRequest();
     TestModeUnchangedWhenAlreadyEqual();

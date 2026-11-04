@@ -1,4 +1,6 @@
 #include "v2/InstanceV2Impl.h"
+#include "CallAudioWebRtc.h"
+#include "CallSystemPolicy.h"
 
 #include "LogSinkImpl.h"
 #include "VideoCaptureInterfaceImpl.h"
@@ -160,6 +162,10 @@ public:
                 << (processing.softwareNoiseSuppression ? "on" : "off")
                 << " (" << processing.reason << ")";
             _dropsSoftwareNoiseSuppression = !processing.softwareNoiseSuppression;
+            // macOS: digital microphone gain instead of the adaptive-analog AGC that moves the system slider.
+            if (!audiopolicy::analogAgcEnabled()) {
+                audioOptions.auto_gain_control = false;
+            }
         }
 
         const auto contentId = std::to_string(_ssrc);
@@ -1156,6 +1162,13 @@ public:
         peerConnectionFactoryDependencies.adm = _audioDeviceModule;
 
         webrtc::AudioProcessingBuilder builder;
+        {
+            webrtc::AudioProcessing::Config apmConfig;
+            if (audiopolicy::applyDigitalMicGain(apmConfig)) {
+                builder.SetConfig(apmConfig);
+                RTC_LOG(LS_INFO) << "Call audio processing policy: digital AGC2";
+            }
+        }
         peerConnectionFactoryDependencies.audio_processing = builder.Create();
 
         _availableVideoFormats = peerConnectionFactoryDependencies.video_encoder_factory->GetSupportedFormats();
@@ -1221,7 +1234,7 @@ public:
 
             strong->writeStateLogRecords();
 
-            strong->beginLogTimer(1000);
+            strong->beginLogTimer(systempolicy::kStatsIntervalMs);
         }, webrtc::TimeDelta::Millis(delayMs));
     }
 

@@ -8,6 +8,12 @@
 #include <string>
 #include <vector>
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
+#include "CallsRuntimeSwitches.h"
+
 namespace tgcalls {
 
 #if defined(WEBRTC_IOS)
@@ -125,12 +131,13 @@ inline CaptureProcessingChoice chooseCaptureProcessing(bool switchOn, bool isIos
 
 // The engine's audio-device start applies its own session configuration (mode voiceChat), which
 // replaces the mode the app's session manager chose for the call (videoChat for a video call).
-// With the switch on, the engine's default voiceChat no longer replaces a call mode that is
-// already set. A mode the caller asked for explicitly is always applied.
-inline std::string chooseAudioSessionMode(const std::string &configured, const std::string &current, bool keepCurrentCallMode) {
+// A video call keeps videoChat (speaker-first routing, camera-aware tuning, like FaceTime): the engine's
+// default voiceChat never replaces a call mode that is already videoChat. A mode the caller asked for
+// explicitly (anything other than the default voiceChat) is always applied. Always on, no switch.
+inline std::string chooseAudioSessionMode(const std::string &configured, const std::string &current) {
     static const char *const kVoiceChat = "AVAudioSessionModeVoiceChat";
     static const char *const kVideoChat = "AVAudioSessionModeVideoChat";
-    if (keepCurrentCallMode && configured == kVoiceChat && current == kVideoChat) {
+    if (configured == kVoiceChat && current == kVideoChat) {
         return current;
     }
     return configured;
@@ -170,6 +177,84 @@ inline OtherAudioDuckingPlan chooseOtherAudioDucking(bool switchOn, bool osSuppo
     }
     return plan;
 }
+
+// --- Group noise, microphone gain, hardware mute (decisions shared by both apps) ----------------
+
+namespace audiopolicy {
+
+// On macOS the input device's own mute control is not toggled: the software mute (SetAudioSend / Enable)
+// already silences the stream, and a hardware mute is global to the device, so a crash or a USB headset
+// could leave the microphone muted for every app.
+inline bool shouldUseHardwareMicrophoneMute() {
+#if defined(__APPLE__) && TARGET_OS_OSX
+    return false;
+#else
+    return true;
+#endif
+}
+
+// Group calls can run WebRTC's noise suppressor, RNNoise or both (CallsRuntimeSwitches::groupNoiseMode).
+enum class GroupNoiseMode : int {
+    Both = 0,
+    ApmOnly = 1,
+    RNNoiseOnly = 2
+};
+
+inline GroupNoiseMode groupNoiseModeFromInt(int value) {
+    switch (value) {
+        case 1: return GroupNoiseMode::ApmOnly;
+        case 2: return GroupNoiseMode::RNNoiseOnly;
+        default: return GroupNoiseMode::Both;
+    }
+}
+
+struct GroupNoiseResolution {
+    bool apmNoiseSuppression = false;
+    bool rnnoise = false;
+};
+
+// `userEnabled` is the in-call noise suppression toggle. `apmRequested` is what the call would use without
+// this policy. With the toggle off the APM suppressor is never removed, so turning suppression off never
+// leaves a noisy microphone worse than before.
+inline GroupNoiseResolution resolveGroupNoise(GroupNoiseMode mode, bool userEnabled, bool apmRequested) {
+    GroupNoiseResolution result;
+    switch (mode) {
+        case GroupNoiseMode::Both:
+            result.apmNoiseSuppression = apmRequested;
+            result.rnnoise = userEnabled;
+            break;
+        case GroupNoiseMode::ApmOnly:
+            result.apmNoiseSuppression = apmRequested;
+            result.rnnoise = false;
+            break;
+        case GroupNoiseMode::RNNoiseOnly:
+            result.apmNoiseSuppression = apmRequested && !userEnabled;
+            result.rnnoise = userEnabled;
+            break;
+    }
+    return result;
+}
+
+inline GroupNoiseMode currentGroupNoiseMode() {
+    return groupNoiseModeFromInt(CallsRuntimeSwitches::groupNoiseMode());
+}
+
+// macOS: the microphone level is adjusted with a digital gain (AGC2) and the system input volume slider is
+// left alone. The legacy adaptive-analog AGC moved the slider under the user. iOS: the engine already
+// forces AGC off, so the legacy flag stays as it is. Always on, no switch.
+inline bool usesDigitalMicGain() {
+#if defined(__APPLE__) && TARGET_OS_OSX
+    return true;
+#else
+    return false;
+#endif
+}
+
+inline bool analogAgcEnabled() {
+    return !usesDigitalMicGain();
+}
+
+} // namespace audiopolicy
 
 } // namespace tgcalls
 

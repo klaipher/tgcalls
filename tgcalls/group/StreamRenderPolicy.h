@@ -2,6 +2,7 @@
 #define TGCALLS_STREAM_RENDER_POLICY_H
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <string>
@@ -31,11 +32,18 @@ inline StreamRenderActivity streamRenderActivity(bool audioPlaying, bool videoPl
     return audioPlaying ? StreamRenderActivity::AudioOnly : StreamRenderActivity::Idle;
 }
 
-// Time until the next render tick. It used to be a fixed 8 ms (120 Hz) for as long as the stream
-// existed. Video never exceeds 60 fps, so one display refresh is enough; audio is refilled in
-// bulk, so a few tens of milliseconds are enough. Whatever the activity, the delay stays within
-// half of the ring buffer so a full ring cannot drain below half before the next refill.
-inline int streamRenderDelayMs(StreamRenderActivity activity, int ringCapacityMs) {
+// Time until the next render tick. It used to be a fixed 8 ms (120 Hz) for as long as the stream existed.
+// - Video: the tick follows the display. It wakes when the next decoded frame is due (`secondsToNextFrame`,
+//   negative or not finite when unknown), within [8 ms, 20 ms]: fewer wake-ups than a fixed 16 ms at 30 fps and
+//   no judder from a fixed grid.
+// - Audio only: audio is refilled in bulk, so every 40 ms is enough.
+// - Idle: the tick only starts segment requests and promotes finished downloads, every 20 ms.
+// Whatever the activity, the delay stays within half of the ring buffer so a full ring cannot drain below half
+// before the next refill.
+constexpr int kStreamVideoFloorMs = 8;
+constexpr int kStreamVideoCapMs = 20;
+
+inline int streamRenderDelayMs(StreamRenderActivity activity, int ringCapacityMs, double secondsToNextFrame = -1.0) {
     int delay = 20;
     switch (activity) {
         case StreamRenderActivity::Idle:
@@ -45,7 +53,12 @@ inline int streamRenderDelayMs(StreamRenderActivity activity, int ringCapacityMs
             delay = 40;
             break;
         case StreamRenderActivity::Video:
-            delay = 16;
+            if (!(secondsToNextFrame >= 0.0) || !std::isfinite(secondsToNextFrame)) {
+                delay = kStreamVideoFloorMs;
+            } else {
+                const double millis = std::ceil(secondsToNextFrame * 1000.0);
+                delay = millis >= static_cast<double>(kStreamVideoCapMs) ? kStreamVideoCapMs : std::max(kStreamVideoFloorMs, static_cast<int>(millis));
+            }
             break;
     }
     return std::max(1, std::min(delay, ringCapacityMs / 2));

@@ -28,6 +28,13 @@
 #import "base/RTCVideoFrameBuffer.h"
 #import "components/video_frame_buffer/RTCCVPixelBuffer.h"
 #import "helpers.h"
+#import "TGRTCScreenVideoRange.h"
+#include "TGRTCVideoRecovery.h"
+#include "CallsRuntimeSwitches.h"
+#include "platform/darwin/EncoderModePolicy.h"
+#import "TGRTCPixelTransfer.h"
+
+#include <atomic>
 
 #include "common_video/h264/h264_bitstream_parser.h"
 
@@ -70,7 +77,9 @@ const float kLimitToAverageBitRateFactor = 1.5f;
 const int kLowH264QpThreshold = 28;
 const int kHighH264QpThreshold = 39;
 
-const OSType kNV12PixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+static OSType NV12PixelFormat() {
+  return TGRTCI420CopyPixelFormat();
+}
 
 // Struct that we pass to the encoder per frame to encode. We receive it again
 // in the encoder callback.
@@ -104,7 +113,7 @@ struct RTCFrameEncodeParams {
 // TODO(tkchin): See if encoder will accept i420 frames and compare performance.
 static bool CopyVideoFrameToNV12PixelBuffer(id<RTCI420Buffer> frameBuffer, CVPixelBufferRef pixelBuffer) {
   RTC_DCHECK(pixelBuffer);
-  RTC_DCHECK_EQ(CVPixelBufferGetPixelFormatType(pixelBuffer), kNV12PixelFormat);
+  RTC_DCHECK_EQ(CVPixelBufferGetPixelFormatType(pixelBuffer), NV12PixelFormat());
   RTC_DCHECK_EQ(CVPixelBufferGetHeightOfPlane(pixelBuffer, 0), frameBuffer.height);
   RTC_DCHECK_EQ(CVPixelBufferGetWidthOfPlane(pixelBuffer, 0), frameBuffer.width);
 
@@ -327,22 +336,27 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
 }
 }  // namespace
 
+static bool TGRTCH264UsesLowLatencyRateControl(const webrtc::H264ProfileLevelId &profile_level_id) {
+  return profile_level_id.profile == webrtc::H264Profile::kProfileConstrainedHigh || profile_level_id.profile == webrtc::H264Profile::kProfileHigh;
+}
+
 @implementation TGRTCVideoEncoderH264 {
   RTCVideoCodecInfo *_codecInfo;
   std::unique_ptr<webrtc::BitrateAdjuster> _bitrateAdjuster;
   uint32_t _targetBitrateBps;
   uint32_t _encoderBitrateBps;
+  TGRTCPixelTransfer *_pixelTransfer;
+  BOOL _hardwareCropFailed;
   uint32_t _encoderFrameRate;
   uint32_t _maxAllowedFrameRate;
   RTCH264PacketizationMode _packetizationMode;
   absl::optional<webrtc::H264ProfileLevelId> _profile_level_id;
-  // iOS low-latency mode (Debug Settings "Calls: low-latency encoder"); both false is the standard
-  // mode this encoder has always used.
+  // Low-latency rate control (Q6) and real-time mode; both false is the standard mode this encoder had before Q6.
   bool _usesLowLatencyRateControl;
   bool _usesRealTimeEncoding;
   bool _lowLatencyConfigurationFailed;
-  // A low-latency session that fails after it was created ends low-latency mode for the process; the
-  // output callback runs on a VideoToolbox thread, so it only asks the encode thread to rebuild.
+  // A low-latency session that fails after it was created ends low-latency mode for the process; the output
+  // callback runs on a VideoToolbox thread, so it only asks the encode thread to rebuild.
   tgcalls::LowLatencyFailureTracker _lowLatencyFailureTracker;
   std::atomic<bool> _rebuildInStandardModeRequested;
   RTCVideoEncoderCallback _callback;
@@ -354,6 +368,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
 
   webrtc::H264BitstreamParser _h264BitstreamParser;
   std::vector<uint8_t> _frameScaleBuffer;
+  CFStringRef _sessionColorMatrix;
 }
 
 // .5 is set as a mininum to prevent overcompensating for large temporary
@@ -367,6 +382,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
   if (self = [super init]) {
     _codecInfo = codecInfo;
     _bitrateAdjuster.reset(new webrtc::BitrateAdjuster(.5, .95));
+    _rebuildInStandardModeRequested.store(false);
     _packetizationMode = RTCH264PacketizationModeNonInterleaved;
     _profile_level_id =
       webrtc::ParseSdpForH264ProfileLevelId([codecInfo nativeSdpVideoFormat].parameters);
@@ -408,7 +424,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
   // TODO(tkchin): Try setting payload size via
   // kVTCompressionPropertyKey_MaxH264SliceBytes.
 
-  return [self resetCompressionSessionWithPixelFormat:kNV12PixelFormat];
+  return [self resetCompressionSessionWithPixelFormat:NV12PixelFormat()];
 }
 
 - (NSInteger)encode:(RTCVideoFrame *)frame
@@ -450,20 +466,40 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
       if (!pixelBuffer) {
         return WEBRTC_VIDEO_CODEC_ERROR;
       }
-      int dstWidth = (int)CVPixelBufferGetWidth(pixelBuffer);
-      int dstHeight = (int)CVPixelBufferGetHeight(pixelBuffer);
-      if ([rtcPixelBuffer requiresScalingToWidth:dstWidth height:dstHeight]) {
-        int size =
-            [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:dstWidth height:dstHeight];
-        _frameScaleBuffer.resize(size);
-      } else {
-        _frameScaleBuffer.clear();
+      BOOL didHardwareCrop = NO;
+#if TARGET_OS_OSX
+      if (!_hardwareCropFailed && tgcalls::CallsRuntimeSwitches::hardwareCrop()) {
+        if (!_pixelTransfer) {
+          _pixelTransfer = [[TGRTCPixelTransfer alloc] init];
+        }
+        didHardwareCrop = [_pixelTransfer cropAndScaleSource:rtcPixelBuffer.pixelBuffer
+                                                       cropX:rtcPixelBuffer.cropX
+                                                       cropY:rtcPixelBuffer.cropY
+                                                   cropWidth:rtcPixelBuffer.cropWidth
+                                                  cropHeight:rtcPixelBuffer.cropHeight
+                                                 destination:pixelBuffer];
+        if (!didHardwareCrop) {
+          _hardwareCropFailed = YES;
+          RTC_LOG(LS_WARNING) << "Hardware crop failed, using the software crop for this encoder";
+        }
       }
-      _frameScaleBuffer.shrink_to_fit();
-      if (![rtcPixelBuffer cropAndScaleTo:pixelBuffer withTempBuffer:_frameScaleBuffer.data()]) {
-        CVBufferRelease(pixelBuffer);
-        return WEBRTC_VIDEO_CODEC_ERROR;
+#endif
+      if (!didHardwareCrop) {
+        int dstWidth = (int)CVPixelBufferGetWidth(pixelBuffer);
+        int dstHeight = (int)CVPixelBufferGetHeight(pixelBuffer);
+        if ([rtcPixelBuffer requiresScalingToWidth:dstWidth height:dstHeight]) {
+          int size =
+              [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:dstWidth height:dstHeight];
+          _frameScaleBuffer.resize(size);
+        } else {
+          _frameScaleBuffer.clear();
+        }
+        if (![rtcPixelBuffer cropAndScaleTo:pixelBuffer withTempBuffer:_frameScaleBuffer.data()]) {
+          CVBufferRelease(pixelBuffer);
+          return WEBRTC_VIDEO_CODEC_ERROR;
+        }
       }
+      CVBufferPropagateAttachments(rtcPixelBuffer.pixelBuffer, pixelBuffer);
     }
   }
 
@@ -479,6 +515,11 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
       CVBufferRelease(pixelBuffer);
       return WEBRTC_VIDEO_CODEC_ERROR;
     }
+    TGRTCTagLimitedRangeBT601(pixelBuffer);
+  }
+
+  if (TGRTCUpdateSessionColorMatrix(_compressionSession, pixelBuffer, &_sessionColorMatrix)) {
+    isKeyframeRequired = YES;
   }
 
   // Check if we need a keyframe.
@@ -548,16 +589,14 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
-// Ends low-latency mode for the process when the failed session ran in it, so the rebuild that follows
-// is the standard session instead of the same failing one.
+// Ends low-latency mode for the process when the failed session ran in it, so the rebuild that follows is the
+// standard session instead of the same failing one.
 - (void)latchLowLatencyIfNeeded:(tgcalls::EncodeFailureKind)kind {
-#if defined(WEBRTC_IOS)
   if (_lowLatencyFailureTracker.shouldFallBack(_usesLowLatencyRateControl, kind)) {
     RTC_LOG(LS_WARNING) << "H264 encoder: low-latency session failed (" << static_cast<int>(kind)
                         << "), using the standard mode from now on";
     tgcalls::EncoderLowLatencyLatch::markFailed();
   }
-#endif
 }
 
 - (void)setCallback:(RTCVideoEncoderCallback)callback {
@@ -606,7 +645,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
     return CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
   }
 
-  return kNV12PixelFormat;
+  return NV12PixelFormat();
 }
 
 - (BOOL)resetCompressionSessionIfNeededWithFrame:(RTCVideoFrame *)frame {
@@ -678,23 +717,19 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
   _usesLowLatencyRateControl = false;
   _usesRealTimeEncoding = false;
   _lowLatencyConfigurationFailed = false;
+  // Low-latency rate control is for the High profiles only. It is always on; a failure at any point (creation,
+  // configuration, a later malfunction) latches it off for the process (EncoderLowLatencyLatch) and the next
+  // session is the standard one this encoder built before low-latency mode existed: standard rate control, no
+  // real-time mode. The key exists since iOS 14.5 and macOS 11.3.
+  bool lowLatencySupported = true;
 #if defined(WEBRTC_IOS)
-  // The key exists since iOS 14.5. Every failure below falls back to the standard session.
-  bool lowLatencySupported = false;
+  lowLatencySupported = false;
   if (@available(iOS 14.5, *)) {
     lowLatencySupported = true;
   }
-  tgcalls::EncoderMode encoderMode = tgcalls::chooseEncoderMode(tgcalls::CallsRuntimeSwitches::encoderLowLatency(), lowLatencySupported);
-  if (encoderMode.lowLatency) {
-    if (@available(iOS 14.5, *)) {
-      encoder_specs = CFDictionaryCreateMutable(
-          nullptr, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-      CFDictionarySetValue(encoder_specs,
-                           kVTVideoEncoderSpecification_EnableLowLatencyRateControl,
-                           kCFBooleanTrue);
-    }
-  }
 #endif
+  tgcalls::EncoderMode encoderMode = tgcalls::chooseEncoderMode(true, lowLatencySupported);
+  const bool wantsLowLatency = encoderMode.lowLatency && TGRTCH264UsesLowLatencyRateControl(*_profile_level_id);
 #if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
   // Currently hw accl is supported above 360p on mac, below 360p
   // the compression session will be created with hw accl disabled.
@@ -704,6 +739,15 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
                        kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
                        kCFBooleanTrue);
 #endif
+  if (wantsLowLatency) {
+    if (!encoder_specs) {
+      encoder_specs = CFDictionaryCreateMutable(
+          nullptr, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    }
+    if (@available(iOS 14.5, macOS 11.3, *)) {
+      CFDictionarySetValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl, kCFBooleanTrue);
+    }
+  }
   OSStatus status =
       VTCompressionSessionCreate(nullptr,  // use default allocator
                                  _width,
@@ -715,24 +759,23 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
                                  compressionOutputCallback,
                                  nullptr,
                                  &_compressionSession);
-#if defined(WEBRTC_IOS)
-  if (encoder_specs && encoderMode.lowLatency) {
-    if (status == noErr) {
-      _usesLowLatencyRateControl = true;
-      _usesRealTimeEncoding = encoderMode.realTime;
-    } else {
-      // A device or profile that cannot do low-latency rate control gets today's session.
-      RTC_LOG(LS_WARNING) << "H264 encoder: low-latency rate control could not be created (" << status << "), using the standard mode";
-      tgcalls::EncoderLowLatencyLatch::markFailed();
-      CFDictionaryRemoveValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl);
-      status = VTCompressionSessionCreate(nullptr, _width, _height, kCMVideoCodecType_H264, nullptr, sourceAttributes, nullptr, compressionOutputCallback, nullptr, &_compressionSession);
-    }
+  if (status != noErr && wantsLowLatency) {
+    // A device or profile that cannot do low-latency rate control gets the standard session, and no later
+    // session of this process tries again.
+    RTC_LOG(LS_INFO) << "Low-latency rate control is unavailable, retrying without it: " << status;
+    tgcalls::EncoderLowLatencyLatch::markFailed();
+    CFDictionaryRemoveValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl);
+    status = VTCompressionSessionCreate(nullptr, _width, _height, kCMVideoCodecType_H264, encoder_specs, sourceAttributes, nullptr, compressionOutputCallback, nullptr, &_compressionSession);
+    encoderMode = tgcalls::chooseEncoderMode(false, true);
+    encoderMode.reason = "failed-earlier";
+  } else if (status == noErr && wantsLowLatency) {
+    _usesLowLatencyRateControl = true;
   }
-  if (tgcalls::CallsRuntimeSwitches::encoderLowLatency()) {
-    RTC_LOG(LS_INFO) << "H264 encoder: " << (_usesLowLatencyRateControl ? "low-latency rate control, real-time" : "standard mode")
-        << " (" << (_usesLowLatencyRateControl ? "ok" : encoderMode.reason) << ") " << _width << "x" << _height;
-  }
-#endif
+  // Real-time mode went in with low-latency rate control (Q6) and applies to every Mac H.264 session of a
+  // chosen low-latency mode, even for profiles that do not use it; the standard mode keeps the old false.
+  _usesRealTimeEncoding = encoderMode.realTime;
+  RTC_LOG(LS_INFO) << "H264 encoder: " << (_usesLowLatencyRateControl ? "low-latency rate control, real-time" : (_usesRealTimeEncoding ? "real-time, standard rate control" : "standard mode"))
+      << " (" << (_usesLowLatencyRateControl ? "ok" : encoderMode.reason) << ") " << _width << "x" << _height;
   if (sourceAttributes) {
     CFRelease(sourceAttributes);
     sourceAttributes = nullptr;
@@ -759,15 +802,13 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
 #endif
   [self configureCompressionSession];
 
-#if defined(WEBRTC_IOS)
   if (_lowLatencyConfigurationFailed) {
-    // The negotiated profile could not be applied in low-latency mode: never send a stream that
-    // differs from what was negotiated. The latch makes the next attempt a standard session.
+    // The negotiated profile could not be applied in low-latency mode: never send a stream that differs from
+    // what was negotiated. The latch makes the next attempt a standard session.
     RTC_LOG(LS_WARNING) << "H264 encoder: low-latency session rejected the negotiated profile, rebuilding in the standard mode";
     tgcalls::EncoderLowLatencyLatch::markFailed();
     return [self resetCompressionSessionWithPixelFormat:framePixelFormat];
   }
-#endif
 
   // The pixel buffer pool is dependent on the compression session so if the session is reset, the
   // pool should be reset as well.
@@ -814,6 +855,10 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
     _compressionSession = nullptr;
     _pixelBufferPool = nullptr;
   }
+  if (_sessionColorMatrix) {
+    CFRelease(_sessionColorMatrix);
+    _sessionColorMatrix = nullptr;
+  }
 }
 
 - (NSString *)implementationName {
@@ -821,14 +866,14 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
 }
 
 - (void)setBitrateBps:(uint32_t)bitrateBps frameRate:(uint32_t)frameRate {
-  if (_encoderBitrateBps != bitrateBps || _encoderFrameRate != frameRate) {
+  if (_encoderFrameRate != frameRate || tgcalls::videorecovery::shouldApplyBitrate(_encoderBitrateBps, bitrateBps)) {
     [self setEncoderBitrateBps:bitrateBps frameRate:frameRate];
   }
 }
 
 - (void)setEncoderBitrateBps:(uint32_t)bitrateBps frameRate:(uint32_t)frameRate {
   if (_compressionSession) {
-    RTC_LOG(LS_ERROR) << "TGRTCVideoEncoderH264: setting bitrate to " << bitrateBps / 1024 << " kbit/s";
+    RTC_LOG(LS_INFO) << "TGRTCVideoEncoderH264: setting bitrate to " << bitrateBps / 1000 << " kbit/s";
       
     SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_AverageBitRate, bitrateBps);
 

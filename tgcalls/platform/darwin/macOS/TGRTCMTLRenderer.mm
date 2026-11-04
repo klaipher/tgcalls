@@ -212,6 +212,10 @@ static inline void getCubeVertexData(size_t frameWidth,
   return metalContext.device;
 }
 
+- (id<MTLRenderPipelineState>)nv12PipelineState {
+  return _context.pipelineNv12Rgb;
+}
+
 
 - (void)uploadTexturesToRenderEncoder:(id<MTLRenderCommandEncoder>)renderEncoder {
 //  RTC_NOTREACHED() << "Virtual method not implemented in subclass.";

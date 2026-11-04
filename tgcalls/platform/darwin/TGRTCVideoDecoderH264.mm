@@ -29,6 +29,7 @@
 #include "rtc_base/time_utils.h"
 #include "sdk/objc/components/video_codec/nalu_rewriter.h"
 #include "TGRTCVideoRecovery.h"
+#include "CallsRuntimeSwitches.h"
 
 // Struct that we pass to the decoder per frame to decode. We receive it again
 // in the decoder callback.
@@ -153,19 +154,15 @@ static void decompressionOutputCallback(void *decoderRef,
   frameDecodeParams.reset(new RTCFrameDecodeParams(_callback, inputImage.timeStamp));
   OSStatus status = VTDecompressionSessionDecodeFrame(
       _decompressionSession, sampleBuffer, decodeFlags, frameDecodeParams.release(), nullptr);
-#if defined(WEBRTC_IOS)
-  // Re-initialize the decoder if we have an invalid session while the app is
-  // active or decoder malfunctions and retry the decode request.
   if ((status == kVTInvalidSessionErr || status == kVTVideoDecoderMalfunctionErr) &&
       _resetLimiter.tryReset(rtc::TimeMillis()) &&
       [self resetDecompressionSession] == WEBRTC_VIDEO_CODEC_OK) {
-    RTC_LOG(LS_INFO) << "Failed to decode frame with code: " << status
-                     << " retrying decode after decompression session reset";
+    RTC_LOG(LS_WARNING) << "Failed to decode frame with code: " << status
+                        << " retrying decode after decompression session reset";
     frameDecodeParams.reset(new RTCFrameDecodeParams(_callback, inputImage.timeStamp));
     status = VTDecompressionSessionDecodeFrame(
         _decompressionSession, sampleBuffer, decodeFlags, frameDecodeParams.release(), nullptr);
   }
-#endif
   CFRelease(sampleBuffer);
   if (status != noErr) {
     RTC_LOG(LS_ERROR) << "Failed to decode frame with code: " << status;
@@ -209,6 +206,8 @@ static void decompressionOutputCallback(void *decoderRef,
   // CVPixelBuffers directly to the renderer.
   // TODO(tkchin): Maybe only set OpenGL/IOSurface keys if we know that that
   // we can pass CVPixelBuffers as native handles in decoder output.
+  const bool useNativeFormat = tgcalls::CallsRuntimeSwitches::nativeDecodeFormat();
+  (void)useNativeFormat;
 #if TARGET_OS_SIMULATOR
   static size_t const attributesSize = 2;
 #else
@@ -219,14 +218,14 @@ static void decompressionOutputCallback(void *decoderRef,
 #if defined(WEBRTC_IOS)
       kCVPixelBufferMetalCompatibilityKey,
 #elif defined(WEBRTC_MAC)
-      kCVPixelBufferOpenGLCompatibilityKey,
+      useNativeFormat ? kCVPixelBufferMetalCompatibilityKey : kCVPixelBufferOpenGLCompatibilityKey,
 #endif
 #if !(TARGET_OS_SIMULATOR)
       kCVPixelBufferIOSurfacePropertiesKey,
 #endif
       kCVPixelBufferPixelFormatTypeKey};
   CFDictionaryRef ioSurfaceValue = CreateCFTypeDictionary(nullptr, nullptr, 0);
-  int64_t nv12type = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+  int64_t nv12type = useNativeFormat ? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
   CFNumberRef pixelFormat = CFNumberCreate(nullptr, kCFNumberLongType, &nv12type);
 #if TARGET_OS_SIMULATOR
   CFTypeRef values[attributesSize] = {kCFBooleanTrue, pixelFormat};
@@ -246,8 +245,17 @@ static void decompressionOutputCallback(void *decoderRef,
   VTDecompressionOutputCallbackRecord record = {
       decompressionOutputCallback, (__bridge void *)self,
   };
+  CFDictionaryRef decoderSpecification = nullptr;
+#if TARGET_OS_OSX
+  decoderSpecification = (__bridge_retained CFDictionaryRef) @{
+    (__bridge NSString *)kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: @YES
+  };
+#endif
   OSStatus status = VTDecompressionSessionCreate(
-      nullptr, _videoFormat, nullptr, attributes, &record, &_decompressionSession);
+      nullptr, _videoFormat, decoderSpecification, attributes, &record, &_decompressionSession);
+  if (decoderSpecification) {
+    CFRelease(decoderSpecification);
+  }
   CFRelease(attributes);
   if (status != noErr) {
     RTC_LOG(LS_ERROR) << "Failed to create decompression session: " << status;
@@ -255,6 +263,17 @@ static void decompressionOutputCallback(void *decoderRef,
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
   [self configureDecompressionSession];
+#if TARGET_OS_OSX
+  CFTypeRef usingHardware = nullptr;
+  if (VTSessionCopyProperty(_decompressionSession,
+                            kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
+                            nullptr,
+                            &usingHardware) == noErr && usingHardware) {
+    RTC_LOG(LS_INFO) << "H264 decoder uses hardware: "
+                     << (CFBooleanGetValue((CFBooleanRef)usingHardware) ? "yes" : "no");
+    CFRelease(usingHardware);
+  }
+#endif
 
   return WEBRTC_VIDEO_CODEC_OK;
 }

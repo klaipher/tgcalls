@@ -5,6 +5,9 @@
 #include "api/video/i420_buffer.h"
 
 #include "AVIOContextImpl.h"
+extern "C" {
+#include <libavutil/pixdesc.h>
+}
 #include "LivestreamDecodePolicy.h"
 #include "StreamRenderPolicy.h"
 #include "platform/PlatformInterface.h"
@@ -336,8 +339,21 @@ LivestreamDecodeStreamInfo describeStream(AVCodecParameters const *codecParamete
             info.codec = LivestreamDecodeCodec::Other;
             break;
     }
-    if (codecParameters->format == AV_PIX_FMT_YUV420P || codecParameters->format == AV_PIX_FMT_YUVJ420P) {
-        info.pixelFormat = LivestreamDecodePixelFormat::Yuv420P8;
+    // Bit depth and chroma layout come from the pixel format descriptor; when the container did not
+    // report a format yet, the codec profile decides (H.264 High 10 and above, HEVC above Main are 10-bit).
+    AVPixFmtDescriptor const *descriptor = codecParameters->format != AV_PIX_FMT_NONE
+        ? av_pix_fmt_desc_get((AVPixelFormat)codecParameters->format)
+        : nullptr;
+    if (descriptor) {
+        const bool chroma420 = descriptor->log2_chroma_w == 1 && descriptor->log2_chroma_h == 1;
+        if (descriptor->comp[0].depth == 8 && chroma420 && !(descriptor->flags & AV_PIX_FMT_FLAG_RGB)) {
+            info.pixelFormat = LivestreamDecodePixelFormat::Yuv420P8;
+        }
+    } else if (info.codec != LivestreamDecodeCodec::Other) {
+        const bool tenBit = info.codec == LivestreamDecodeCodec::H264 ? codecParameters->profile >= 110 : codecParameters->profile > 1;
+        if (!tenBit) {
+            info.pixelFormat = LivestreamDecodePixelFormat::Yuv420P8;
+        }
     }
     info.width = codecParameters->width;
     info.height = codecParameters->height;
@@ -540,11 +556,11 @@ public:
     
     // A decode call failed. Returns what the caller should do with the rest of the part. A
     // hardware failure drops the hardware decoder, so the next part starts a software one.
-    LivestreamDecodeErrorAction onDecodeError() {
+    LivestreamDecodeErrorAction onDecodeError(LivestreamDecodeStage stage = LivestreamDecodeStage::Receive) {
         auto mode = (_decoderState && _decoderState->isHardware()) ? LivestreamDecodeMode::Hardware : LivestreamDecodeMode::Software;
-        auto action = _health.onDecodeError(mode);
+        auto action = _health.onDecodeError(mode, stage);
         if (action == LivestreamDecodeErrorAction::FallBackToSoftware) {
-            RTC_LOG(LS_WARNING) << "livestream decode: hardware decoding failed, this stream continues in software from the next part";
+            RTC_LOG(LS_WARNING) << "livestream decode: hardware decoding failed at stage " << (int)stage << ", this stream continues in software from the next part";
             _decoderState.reset();
         }
         return action;
@@ -730,10 +746,14 @@ public:
                 .build();
 
             return VideoStreamingPartFrame(_endpointId, videoFrame, _frame.pts(_videoStream, _firstFramePts), _frameIndex);
-        } else if (_frame.frame()->format == AV_PIX_FMT_VIDEOTOOLBOX) {
-            // A hardware frame without a pixel buffer has no I420 planes to copy.
-            return absl::nullopt;
         } else {
+            // A hardware frame (VideoToolbox) with no usable pixel buffer has no I420 planes to copy: the
+            // caller treats it as a hardware failure and the stream continues in software.
+            AVPixFmtDescriptor const *descriptor = av_pix_fmt_desc_get((AVPixelFormat)_frame.frame()->format);
+            if (descriptor && (descriptor->flags & AV_PIX_FMT_FLAG_HWACCEL)) {
+                _hardwareFrameRejected = true;
+                return absl::nullopt;
+            }
             webrtc::scoped_refptr<webrtc::I420Buffer> i420Buffer = webrtc::I420Buffer::Copy(
                 _frame.frame()->width,
                 _frame.frame()->height,
@@ -789,6 +809,10 @@ public:
                             if (convertedFrame) {
                                 _frameIndex++;
                                 return convertedFrame;
+                            } else if (_hardwareFrameRejected) {
+                                sharedState->impl()->onDecodeError(LivestreamDecodeStage::FrameConversion);
+                                _didReadToEnd = true;
+                                break;
                             }
                         } else if (receiveStatus == AVERROR(EAGAIN)) {
                             // more data needed
@@ -817,6 +841,9 @@ public:
                                 if (convertedFrame) {
                                     _frameIndex++;
                                     _finalFrames.push_back(convertedFrame.value());
+                                } else if (_hardwareFrameRejected) {
+                                    sharedState->impl()->onDecodeError(LivestreamDecodeStage::FrameConversion);
+                                    break;
                                 }
                             } else {
                                 if (receiveStatus != AVERROR_EOF) {
@@ -855,6 +882,7 @@ private:
     bool _didReadToEnd = false;
     // Set by the first getNextFrame: a skipped-part flush is only taken before the first packet of a part.
     bool _decodeStarted = false;
+    bool _hardwareFrameRejected = false;
 };
 
 class VideoStreamingPartState {
@@ -967,6 +995,14 @@ public:
         }
     }
 
+    // Presentation time of the frame after the current one, once decoded: the render loop wakes for it.
+    absl::optional<double> nextFramePts() const {
+        if (_availableFrames.size() >= 2) {
+            return _availableFrames[1].pts;
+        }
+        return absl::nullopt;
+    }
+
     absl::optional<std::string> getActiveEndpointId() const {
         if (!_parsedVideoParts.empty()) {
             return _parsedVideoParts[0]->endpointId();
@@ -1033,6 +1069,10 @@ absl::optional<std::string> VideoStreamingPart::getActiveEndpointId() const {
     return _state
         ? _state->getActiveEndpointId()
         : absl::nullopt;
+}
+
+absl::optional<double> VideoStreamingPart::nextFramePts() const {
+    return _state ? _state->nextFramePts() : absl::nullopt;
 }
 
 bool VideoStreamingPart::hasRemainingFrames() const {

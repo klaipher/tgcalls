@@ -7,6 +7,7 @@
 #import "v2/InstanceV2Impl.h"
 #import "v2/InstanceV2ReferenceImpl.h"
 #include "StaticThreads.h"
+#include "platform/darwin/TGRTCVideoGeometry.h"
 
 #import "VideoCaptureInterface.h"
 #import "platform/darwin/VideoCameraCapturer.h"
@@ -235,11 +236,11 @@
         _strideY = nv12Buffer->StrideY();
         _strideUV = nv12Buffer->StrideUV();
 
-        _y = [[NSData alloc] initWithBytesNoCopy:(void *)nv12Buffer->DataY() length:nv12Buffer->StrideY() * _height deallocator:^(__unused void * _Nonnull bytes, __unused NSUInteger length) {
+        _y = [[NSData alloc] initWithBytesNoCopy:(void *)nv12Buffer->DataY() length:tgcalls::videogeometry::planeLength(nv12Buffer->StrideY(), nv12Buffer->height()) deallocator:^(__unused void * _Nonnull bytes, __unused NSUInteger length) {
             nv12Buffer.get();
         }];
 
-        _uv = [[NSData alloc] initWithBytesNoCopy:(void *)nv12Buffer->DataUV() length:nv12Buffer->StrideUV() * _height deallocator:^(__unused void * _Nonnull bytes, __unused NSUInteger length) {
+        _uv = [[NSData alloc] initWithBytesNoCopy:(void *)nv12Buffer->DataUV() length:tgcalls::videogeometry::planeLength(nv12Buffer->StrideUV(), nv12Buffer->ChromaHeight()) deallocator:^(__unused void * _Nonnull bytes, __unused NSUInteger length) {
             nv12Buffer.get();
         }];
     }
@@ -260,15 +261,15 @@
         _strideU = i420Buffer->StrideU();
         _strideV = i420Buffer->StrideV();
 
-        _y = [[NSData alloc] initWithBytesNoCopy:(void *)i420Buffer->DataY() length:i420Buffer->StrideY() * _height deallocator:^(__unused void * _Nonnull bytes, __unused NSUInteger length) {
+        _y = [[NSData alloc] initWithBytesNoCopy:(void *)i420Buffer->DataY() length:tgcalls::videogeometry::planeLength(i420Buffer->StrideY(), i420Buffer->height()) deallocator:^(__unused void * _Nonnull bytes, __unused NSUInteger length) {
             i420Buffer.get();
         }];
 
-        _u = [[NSData alloc] initWithBytesNoCopy:(void *)i420Buffer->DataU() length:i420Buffer->StrideU() * _height deallocator:^(__unused void * _Nonnull bytes, __unused NSUInteger length) {
+        _u = [[NSData alloc] initWithBytesNoCopy:(void *)i420Buffer->DataU() length:tgcalls::videogeometry::planeLength(i420Buffer->StrideU(), i420Buffer->ChromaHeight()) deallocator:^(__unused void * _Nonnull bytes, __unused NSUInteger length) {
             i420Buffer.get();
         }];
 
-        _v = [[NSData alloc] initWithBytesNoCopy:(void *)i420Buffer->DataV() length:i420Buffer->StrideV() * _height deallocator:^(__unused void * _Nonnull bytes, __unused NSUInteger length) {
+        _v = [[NSData alloc] initWithBytesNoCopy:(void *)i420Buffer->DataV() length:tgcalls::videogeometry::planeLength(i420Buffer->StrideV(), i420Buffer->ChromaHeight()) deallocator:^(__unused void * _Nonnull bytes, __unused NSUInteger length) {
             i420Buffer.get();
         }];
     }

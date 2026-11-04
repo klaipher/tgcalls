@@ -1,4 +1,5 @@
 #include "group/StreamRenderPolicy.h"
+#include <limits>
 
 #include <cstdio>
 #include <map>
@@ -22,9 +23,41 @@ using namespace tgcalls;
 
 // The render timer used to repost itself every 8 ms forever. The delay now depends on what the
 // tick has to serve.
-void TestVideoTicksAtOneDisplayRefreshAtMost() {
-    const int delay = streamRenderDelayMs(StreamRenderActivity::Video, kStreamAudioRingCapacityMs);
-    CHECK_TRUE(delay >= 16 && delay <= 17);
+// Video follows the next frame's presentation time, within [8 ms, 20 ms]; unknown means the floor.
+void TestVideoTickFollowsTheNextFrame() {
+    const auto ring = kStreamAudioRingCapacityMs;
+    CHECK_TRUE(streamRenderDelayMs(StreamRenderActivity::Video, ring) == 8);
+    CHECK_TRUE(streamRenderDelayMs(StreamRenderActivity::Video, ring, -1.0) == 8);
+    CHECK_TRUE(streamRenderDelayMs(StreamRenderActivity::Video, ring, std::numeric_limits<double>::quiet_NaN()) == 8);
+    CHECK_TRUE(streamRenderDelayMs(StreamRenderActivity::Video, ring, std::numeric_limits<double>::infinity()) == 8);
+    CHECK_TRUE(streamRenderDelayMs(StreamRenderActivity::Video, ring, 0.0) == 8);
+    CHECK_TRUE(streamRenderDelayMs(StreamRenderActivity::Video, ring, 0.003) == 8);
+    CHECK_TRUE(streamRenderDelayMs(StreamRenderActivity::Video, ring, 0.0121) == 13);
+    CHECK_TRUE(streamRenderDelayMs(StreamRenderActivity::Video, ring, 0.020) == 20);
+    CHECK_TRUE(streamRenderDelayMs(StreamRenderActivity::Video, ring, 5.0) == 20);
+    // The frame time is ignored when nothing plays video.
+    CHECK_TRUE(streamRenderDelayMs(StreamRenderActivity::AudioOnly, ring, 0.003) == 40);
+    CHECK_TRUE(streamRenderDelayMs(StreamRenderActivity::Idle, ring, 0.003) == 20);
+    // A small ring bounds every delay to half of it.
+    CHECK_TRUE(streamRenderDelayMs(StreamRenderActivity::Video, 24, 5.0) == 12);
+}
+
+// Fake-clock walk of a 30 fps stream: ticks per second stay far below the old 120 Hz, and above the frame rate.
+void TestThirtyFpsWalk() {
+    double now = 0.0;
+    const double interval = 1.0 / 30.0;
+    int ticks = 0;
+    double nextFrame = interval;
+    while (now < 10.0) {
+        if (now >= nextFrame) {
+            nextFrame += interval;
+        }
+        const int delay = streamRenderDelayMs(StreamRenderActivity::Video, kStreamAudioRingCapacityMs, nextFrame - now);
+        now += delay / 1000.0;
+        ticks++;
+    }
+    CHECK_TRUE(ticks < 10 * 80);
+    CHECK_TRUE(ticks > 10 * 30);
 }
 
 void TestAudioOnlyTicksSlowerThanVideo() {
@@ -135,7 +168,8 @@ int main() {
     TestCatchUpIsBoundedPerTick();
     TestSkippedPartFlushesTheDecoderOnce();
     TestSkippedPartFlushWaitsForThePartStart();
-    TestVideoTicksAtOneDisplayRefreshAtMost();
+    TestVideoTickFollowsTheNextFrame();
+    TestThirtyFpsWalk();
     TestAudioOnlyTicksSlowerThanVideo();
     TestTickNeverLetsTheAudioRingDrainBelowHalf();
     TestIdleStillPollsForNewSegments();

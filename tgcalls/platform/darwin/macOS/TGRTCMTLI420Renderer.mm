@@ -19,6 +19,9 @@
 #import "base/RTCVideoFrameBuffer.h"
 
 #import "TGRTCMTLRenderer+Private.h"
+#import "TGRTCVideoYUVConversion.h"
+#import "components/video_frame_buffer/RTCCVPixelBuffer.h"
+#import <CoreVideo/CoreVideo.h>
 
 
 @implementation TGRTCMTLI420Renderer {
@@ -34,6 +37,63 @@
   int _height;
   int _chromaWidth;
   int _chromaHeight;
+
+  CVMetalTextureCacheRef _textureCache;
+  CVMetalTextureRef _lumaTextureRef;
+  CVMetalTextureRef _chromaTextureRef;
+  BOOL _isBiPlanar;
+  TGRTCYUVConversion _conversion;
+}
+
+- (void)releaseBiPlanarTextures {
+  if (_lumaTextureRef) {
+    CFRelease(_lumaTextureRef);
+    _lumaTextureRef = NULL;
+  }
+  if (_chromaTextureRef) {
+    CFRelease(_chromaTextureRef);
+    _chromaTextureRef = NULL;
+  }
+}
+
+- (void)dealloc {
+  [self releaseBiPlanarTextures];
+  if (_textureCache) {
+    CFRelease(_textureCache);
+    _textureCache = NULL;
+  }
+}
+
+- (BOOL)setupBiPlanarTexturesForPixelBuffer:(CVPixelBufferRef)pixelBuffer device:(id<MTLDevice>)device {
+  OSType pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
+  if (pixelFormat != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange && pixelFormat != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) {
+    return NO;
+  }
+  if ([self nv12PipelineState] == nil) {
+    return NO;
+  }
+  if (!_textureCache) {
+    if (CVMetalTextureCacheCreate(kCFAllocatorDefault, NULL, device, NULL, &_textureCache) != kCVReturnSuccess) {
+      _textureCache = NULL;
+      return NO;
+    }
+  }
+  [self releaseBiPlanarTextures];
+  size_t width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0);
+  size_t height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0);
+  size_t chromaWidth = CVPixelBufferGetWidthOfPlane(pixelBuffer, 1);
+  size_t chromaHeight = CVPixelBufferGetHeightOfPlane(pixelBuffer, 1);
+  if (CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, _textureCache, pixelBuffer, NULL, MTLPixelFormatR8Unorm, width, height, 0, &_lumaTextureRef) != kCVReturnSuccess ||
+      CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, _textureCache, pixelBuffer, NULL, MTLPixelFormatRG8Unorm, chromaWidth, chromaHeight, 1, &_chromaTextureRef) != kCVReturnSuccess) {
+    [self releaseBiPlanarTextures];
+    return NO;
+  }
+  _yTexture = CVMetalTextureGetTexture(_lumaTextureRef);
+  _uTexture = CVMetalTextureGetTexture(_chromaTextureRef);
+  _vTexture = nil;
+  _descriptor = nil;
+  _chromaDescriptor = nil;
+  return _yTexture != nil && _uTexture != nil;
 }
 
 
@@ -54,6 +114,24 @@
   id<MTLDevice> device = [self currentMetalDevice];
   if (!device) {
     return NO;
+  }
+
+  if ([frame.buffer isKindOfClass:[RTC_OBJC_TYPE(RTCCVPixelBuffer) class]]) {
+    RTC_OBJC_TYPE(RTCCVPixelBuffer) *pixelBuffer = (RTC_OBJC_TYPE(RTCCVPixelBuffer) *)frame.buffer;
+    _conversion = TGRTCYUVConversionForPixelBuffer(pixelBuffer.pixelBuffer);
+    if (![pixelBuffer requiresCropping] && [self setupBiPlanarTexturesForPixelBuffer:pixelBuffer.pixelBuffer device:device]) {
+      _isBiPlanar = YES;
+      return YES;
+    }
+  } else {
+    _conversion = TGRTCYUVConversionForI420Frame(frame);
+  }
+  if (_isBiPlanar) {
+    [self releaseBiPlanarTextures];
+    _yTexture = nil;
+    _uTexture = nil;
+    _vTexture = nil;
+    _isBiPlanar = NO;
   }
 
   id<RTC_OBJC_TYPE(RTCI420Buffer)> buffer = [frame.buffer toI420];
@@ -102,9 +180,17 @@
 }
 
 - (void)uploadTexturesToRenderEncoder:(id<MTLRenderCommandEncoder>)renderEncoder {
-  [renderEncoder setFragmentTexture:_yTexture atIndex:0];
-  [renderEncoder setFragmentTexture:_uTexture atIndex:1];
-  [renderEncoder setFragmentTexture:_vTexture atIndex:2];
+  if (_isBiPlanar) {
+    [renderEncoder setRenderPipelineState:[self nv12PipelineState]];
+    [renderEncoder setFragmentTexture:_yTexture atIndex:0];
+    [renderEncoder setFragmentTexture:_uTexture atIndex:1];
+  } else {
+    [renderEncoder setFragmentTexture:_yTexture atIndex:0];
+    [renderEncoder setFragmentTexture:_uTexture atIndex:1];
+    [renderEncoder setFragmentTexture:_vTexture atIndex:2];
+  }
+  TGRTCYUVConversion conversion = _conversion;
+  [renderEncoder setFragmentBytes:&conversion length:sizeof(conversion) atIndex:0];
 }
 
 @end

@@ -5,11 +5,17 @@
 extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/pixfmt.h>
+#include <libavutil/pixdesc.h>
 #include <libavutil/hwcontext.h>
 #include <libavcodec/avcodec.h>
 }
 
+#import <CoreVideo/CoreVideo.h>
+
+#include "rtc_base/logging.h"
+
 #import "ExtractCVPixelBuffer.h"
+#include "group/LivestreamDecodePolicy.h"
 
 namespace tgcalls {
 
@@ -68,7 +74,20 @@ webrtc::scoped_refptr<webrtc::VideoFrameBuffer> createDarwinPlatformFrameFromDat
         return nullptr;
     }
     if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX && frame->data[3]) {
-        return extractCVPixelBuffer((void *)frame->data[3]);
+        CVPixelBufferRef pixelBuffer = (CVPixelBufferRef)(void *)frame->data[3];
+        OSType pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
+        bool is8Bit420 = pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange || pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+        if (!isAcceptableOutputBuffer((int)CVPixelBufferGetPlaneCount(pixelBuffer), is8Bit420 ? 8 : 0, is8Bit420)) {
+            RTC_LOG(LS_WARNING) << "Livestream hardware decode produced an unsupported pixel format: " << pixelFormat;
+            return nullptr;
+        }
+        CFTypeRef matrix = CVBufferCopyAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, nullptr);
+        if (matrix) {
+            CFRelease(matrix);
+        } else {
+            CVBufferSetAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, frame->height >= 720 ? kCVImageBufferYCbCrMatrix_ITU_R_709_2 : kCVImageBufferYCbCrMatrix_ITU_R_601_4, kCVAttachmentMode_ShouldPropagate);
+        }
+        return extractCVPixelBuffer((void *)pixelBuffer);
     } else {
         return nullptr;
     }

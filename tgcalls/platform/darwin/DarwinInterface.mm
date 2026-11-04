@@ -1,4 +1,6 @@
 #include "DarwinInterface.h"
+#include "CallsRuntimeSwitches.h"
+#include "rtc_base/logging.h"
 
 #include "VideoCapturerInterfaceImpl.h"
 #include "sdk/objc/native/src/objc_video_track_source.h"
@@ -69,7 +71,14 @@ void DarwinInterface::configurePlatformAudio(int numChanels) {
 std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeVideoEncoderFactory(bool preferHardwareEncoding, bool isScreencast) {
     auto nativeFactory = std::make_unique<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:preferHardwareEncoding preferX264:false]);
     if (!preferHardwareEncoding) {
-        auto nativeHardwareFactory = std::make_unique<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:!isScreencast preferX264:false]);
+        bool hardwareForSecondary = !isScreencast;
+#if TARGET_OS_OSX
+        if (isScreencast && CallsRuntimeSwitches::screencastHardwareEncoder()) {
+            hardwareForSecondary = true;
+            RTC_LOG(LS_INFO) << "Screen share video uses the VideoToolbox encoder (debug option)";
+        }
+#endif
+        auto nativeHardwareFactory = std::make_unique<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:hardwareForSecondary preferX264:false]);
         return std::make_unique<webrtc::SimulcastVideoEncoderFactory>(std::move(nativeFactory), std::move(nativeHardwareFactory));
     }
     return nativeFactory;

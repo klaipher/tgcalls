@@ -19,8 +19,17 @@ let package = Package(
             dependencies: [],
             path: ".",
             exclude: ["LICENSE",
+                      "CLAUDE.md",
+                      "Dockerfile",
+                      "docs",
+                      "tools",
+                      "tgcalls/v2wasm",
                       "tgcalls/v2/MtProtoDtlsTransportTest.cpp",
+                      "tgcalls/v2/MtProtoDtlsTransport.cpp",
+                      "tgcalls/v2/InstanceV2CompatImpl.cpp",
+                      "tgcalls/group/GroupInstanceReferenceImpl.cpp",
                       "README.md",
+                      "tests",
                       "tgcalls/platform/android",
                       "tgcalls/platform/tdesktop",
                       "tgcalls/platform/uwp",
@@ -39,15 +48,6 @@ let package = Package(
                       "tgcalls/platform/darwin/CustomExternalCapturer.h",
                       "tgcalls/group/StreamingAudioRendererTest.cpp",
                       "tgcalls/group/GroupFrameTransformerTest.cpp",
-                      "tgcalls/group/LivestreamDecodePolicyTest.cpp",
-                      "tgcalls/VideoPlaneLayoutTest.cpp",
-                      "tgcalls/AudioCallPolicyTest.cpp",
-                      "tgcalls/BoundedHistoryPolicyTest.cpp",
-                      "tgcalls/CallPowerPolicyTest.cpp",
-                      "tgcalls/group/StreamRenderPolicyTest.cpp",
-                      "tgcalls/platform/darwin/CaptureFramePolicyTest.cpp",
-                      "tgcalls/platform/darwin/EncoderModePolicyTest.cpp",
-                      "tgcalls/platform/darwin/TGRTCVideoRecoveryPolicyTest.cpp",
                       "tgcalls/legacy/InstanceImplLegacy.h",
                       "tgcalls/legacy/InstanceImplLegacy.cpp"
                      ],
@@ -96,7 +96,14 @@ let package = Package(
                 .define("WEBRTC_OPUS_SUPPORT_120MS_PTIME", to: "1", nil),
                 .define("WEBRTC_OPUS_VARIABLE_COMPLEXITY", to: "0", nil),
                 .define("WEBRTC_USE_H264", to: "", nil),
+                // desktop-app tg_owt lacks Telegram iOS WebRTC's TGCALLS SEAM patches (mtproto in the
+                // DTLS slot, un-demuxable RTP for GroupInstanceReferenceImpl); the files above that need
+                // them are excluded and InstanceV2ReferenceImpl keeps DTLS-SRTP.
+                .define("TGCALLS_WEBRTC_WITHOUT_TELEGRAM_SEAMS", to: "1", nil),
 
+            ],
+            linkerSettings: [
+                .linkedFramework("ScreenCaptureKit"),
             ]),
     ],
     cxxLanguageStandard: .cxx20

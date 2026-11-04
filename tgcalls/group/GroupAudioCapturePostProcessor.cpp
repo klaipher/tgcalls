@@ -98,15 +98,13 @@ void AudioCapturePostProcessor::Process(webrtc::AudioBuffer *buffer) {
     }
     _toProcessingRate->Resample(buffer->channels()[0], captureFrames, _processingSamples.data(), processingFrames);
     const bool modified = processAtProcessingRate(_processingSamples.data());
-    // Narrowband capture (8/16 kHz, Bluetooth headsets) has always dropped the processed signal here, only
-    // feeding the speech detector. Keeping it is a new audio path, behind a local switch. While the
-    // round trip is on, every frame goes through both resamplers (including the ones RNNoise skipped for
-    // being quiet), so the delay is constant and the resampler history never goes stale.
-    if (CallsRuntimeSwitches::groupNarrowbandProcessing()) {
-        const bool roundTrip = modified || (_noiseSuppressionConfiguration && _noiseSuppressionConfiguration->isEnabled);
-        if (roundTrip) {
-            _fromProcessingRate->Resample(_processingSamples.data(), processingFrames, buffer->channels()[0], captureFrames);
-        }
+    // Narrowband capture (8/16 kHz, Bluetooth headsets) keeps the processed signal (always on; it used to be
+    // dropped, only feeding the speech detector). While the round trip is on, every frame goes through both
+    // resamplers (including the ones RNNoise skipped for being quiet), so the delay is constant and the
+    // resampler history never goes stale.
+    const bool roundTrip = modified || (_noiseSuppressionConfiguration && _noiseSuppressionConfiguration->isEnabled);
+    if (roundTrip) {
+        _fromProcessingRate->Resample(_processingSamples.data(), processingFrames, buffer->channels()[0], captureFrames);
     }
 }
 

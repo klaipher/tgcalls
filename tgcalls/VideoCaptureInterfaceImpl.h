@@ -71,6 +71,10 @@ public:
 
 	ThreadLocalObject<VideoCaptureInterfaceObject> *object();
 
+    // Sets the thermal level (0..3) on every live capture interface and remembers it for the ones created later.
+    // The level only limits the outgoing camera video while CallsRuntimeSwitches::thermalVideoLadder() is on.
+    static void setThermalLevelForAll(int level);
+
 private:
 	ThreadLocalObject<VideoCaptureInterfaceObject> _impl;
 

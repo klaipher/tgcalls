@@ -33,6 +33,7 @@
 #include "sdk/objc/components/video_codec/nalu_rewriter.h"
 #include "h265_nalu_rewriter.h"
 #include "TGRTCVideoRecovery.h"
+#include "CallsRuntimeSwitches.h"
 
 #include "StaticThreads.h"
 
@@ -212,19 +213,17 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
   OSStatus status = VTDecompressionSessionDecodeFrame(
       _decompressionSession, sampleBuffer, decodeFlags,
       frameDecodeParams.release(), nullptr);
-#if defined(WEBRTC_IOS)
-  // Re-initialize the decoder if we have an invalid session while the app is
-  // active and retry the decode request.
-  if (status == kVTInvalidSessionErr &&
+  if ((status == kVTInvalidSessionErr || status == kVTVideoDecoderMalfunctionErr) &&
       _resetLimiter.tryReset(rtc::TimeMillis()) &&
       [self resetDecompressionSession] == WEBRTC_VIDEO_CODEC_OK) {
+    RTC_LOG(LS_WARNING) << "Failed to decode H265 frame with code: " << status
+                        << " retrying decode after decompression session reset";
     frameDecodeParams.reset(
         new RTCH265FrameDecodeParams(_callback, inputImage.timeStamp, _requestFrame));
     status = VTDecompressionSessionDecodeFrame(
         _decompressionSession, sampleBuffer, decodeFlags,
         frameDecodeParams.release(), nullptr);
   }
-#endif
   CFRelease(sampleBuffer);
   if (status != noErr) {
     RTC_LOG(LS_ERROR) << "Failed to decode frame with code: " << status;
@@ -279,18 +278,20 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
   // CVPixelBuffers directly to the renderer.
   // TODO(tkchin): Maybe only set OpenGL/IOSurface keys if we know that that
   // we can pass CVPixelBuffers as native handles in decoder output.
+  const bool useNativeFormat = tgcalls::CallsRuntimeSwitches::nativeDecodeFormat();
+  (void)useNativeFormat;
   static size_t const attributesSize = 3;
   CFTypeRef keys[attributesSize] = {
 #if defined(WEBRTC_IOS)
     kCVPixelBufferOpenGLESCompatibilityKey,
 #elif defined(WEBRTC_MAC)
-    kCVPixelBufferOpenGLCompatibilityKey,
+    useNativeFormat ? kCVPixelBufferMetalCompatibilityKey : kCVPixelBufferOpenGLCompatibilityKey,
 #endif
     kCVPixelBufferIOSurfacePropertiesKey,
     kCVPixelBufferPixelFormatTypeKey
   };
   CFDictionaryRef ioSurfaceValue = CreateCFTypeDictionary(nullptr, nullptr, 0);
-  int64_t nv12type = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+  int64_t nv12type = useNativeFormat ? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
   CFNumberRef pixelFormat =
       CFNumberCreate(nullptr, kCFNumberLongType, &nv12type);
   CFTypeRef values[attributesSize] = {kCFBooleanTrue, ioSurfaceValue,
@@ -309,15 +310,35 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
       tg_h265DecompressionOutputCallback,
       nullptr,
   };
+  CFDictionaryRef decoderSpecification = nullptr;
+#if TARGET_OS_OSX
+  decoderSpecification = (__bridge_retained CFDictionaryRef) @{
+    (__bridge NSString *)kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: @YES
+  };
+#endif
   OSStatus status =
-      VTDecompressionSessionCreate(nullptr, _videoFormat, nullptr, attributes,
+      VTDecompressionSessionCreate(nullptr, _videoFormat, decoderSpecification, attributes,
                                    &record, &_decompressionSession);
+  if (decoderSpecification) {
+    CFRelease(decoderSpecification);
+  }
   CFRelease(attributes);
   if (status != noErr) {
     [self destroyDecompressionSession];
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
   [self configureDecompressionSession];
+#if TARGET_OS_OSX
+  CFTypeRef usingHardware = nullptr;
+  if (VTSessionCopyProperty(_decompressionSession,
+                            kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
+                            nullptr,
+                            &usingHardware) == noErr && usingHardware) {
+    RTC_LOG(LS_INFO) << "H265 decoder uses hardware: "
+                     << (CFBooleanGetValue((CFBooleanRef)usingHardware) ? "yes" : "no");
+    CFRelease(usingHardware);
+  }
+#endif
 
   return WEBRTC_VIDEO_CODEC_OK;
 }

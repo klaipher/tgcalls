@@ -26,6 +26,7 @@
 #ifndef WEBRTC_IOS
 #import "VideoCameraCapturerMac.h"
 #import "tgcalls/platform/darwin/DesktopSharingCapturer.h"
+#import "tgcalls/platform/darwin/ScreenCaptureKitCapturer.h"
 #import "tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h"
 #import "CustomExternalCapturer.h"
 #import "VideoCMIOCapture.h"
@@ -36,6 +37,9 @@
 #import <AVFoundation/AVFoundation.h>
 
 #import "VideoCaptureInterface.h"
+#include "TGCameraFormatSelection.h"
+#include "CallsRuntimeSwitches.h"
+#include "rtc_base/logging.h"
 #import "platform/PlatformInterface.h"
 
 @interface VideoCapturerInterfaceImplSourceDescription : NSObject
@@ -133,7 +137,49 @@
     return selectedCamera;
 }
 
++ (AVCaptureDeviceFormat *)rankedCaptureDeviceFormatForDevice:(AVCaptureDevice *)selectedCamera {
+    NSArray<AVCaptureDeviceFormat *> *formats = [VideoCameraCapturer supportedFormatsForDevice:selectedCamera];
+    std::vector<tgcalls::cameraformat::Candidate> candidates;
+    std::vector<AVCaptureDeviceFormat *> sources;
+    for (AVCaptureDeviceFormat *format in formats) {
+        if (![format.mediaType isEqualToString:AVMediaTypeVideo]) {
+            continue;
+        }
+        CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
+        FourCharCode subType = CMFormatDescriptionGetMediaSubType(format.formatDescription);
+        tgcalls::cameraformat::Candidate candidate;
+        candidate.width = dimensions.width;
+        candidate.height = dimensions.height;
+        candidate.minFps = 0.0;
+        candidate.maxFps = 0.0;
+        for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
+            candidate.minFps = candidate.maxFps == 0.0 ? range.minFrameRate : MIN(candidate.minFps, range.minFrameRate);
+            candidate.maxFps = MAX(candidate.maxFps, range.maxFrameRate);
+        }
+        candidate.isHDR = subType == 'x420' || [[format description] containsString:@"x420"];
+        candidate.isFullRange = subType == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+        candidates.push_back(candidate);
+        sources.push_back(format);
+    }
+    int index = tgcalls::cameraformat::selectBest(candidates);
+    if (index < 0) {
+        return nil;
+    }
+    auto const &chosen = candidates[index];
+    RTC_LOG(LS_INFO) << "Camera format selected: " << chosen.width << "x" << chosen.height << " fps " << chosen.minFps << "-" << chosen.maxFps << " binned " << chosen.isBinned << " fullRange " << chosen.isFullRange;
+    return sources[index];
+}
+
 + (AVCaptureDeviceFormat *)selectCaptureDeviceFormatForDevice:(AVCaptureDevice *)selectedCamera {
+#ifndef WEBRTC_IOS
+    {
+        AVCaptureDeviceFormat *ranked = [VideoCapturerInterfaceImplReference rankedCaptureDeviceFormatForDevice:selectedCamera];
+        if (ranked != nil) {
+            return ranked;
+        }
+        RTC_LOG(LS_WARNING) << "Camera format ranking found nothing, using the legacy selection";
+    }
+#endif
     NSMutableArray<AVCaptureDeviceFormat *> *sortedFormats = [NSMutableArray arrayWithArray:[[VideoCameraCapturer supportedFormatsForDevice:selectedCamera] sortedArrayUsingComparator:^NSComparisonResult(AVCaptureDeviceFormat* lhs, AVCaptureDeviceFormat *rhs) {
         int32_t width1 = CMVideoFormatDescriptionGetDimensions(lhs.formatDescription).width;
         int32_t width2 = CMVideoFormatDescriptionGetDimensions(rhs.formatDescription).width;
@@ -223,7 +269,15 @@
         }
 #else
         if (const auto desktopCaptureSource = tgcalls::DesktopCaptureSourceForKey([sourceDescription.deviceId UTF8String])) {
-            DesktopSharingCapturer *sharing = [[DesktopSharingCapturer alloc] initWithSource:source captureSource:desktopCaptureSource];
+            id<CapturerInterface> sharing = nil;
+            if (@available(macOS 14.0, *)) {
+                if ([ScreenCaptureKitCapturer isEnabled]) {
+                    sharing = [[ScreenCaptureKitCapturer alloc] initWithSource:source captureSource:desktopCaptureSource];
+                }
+            }
+            if (sharing == nil) {
+                sharing = [[DesktopSharingCapturer alloc] initWithSource:source captureSource:desktopCaptureSource];
+            }
             _videoCapturer = sharing;
         } else if (!tgcalls::ShouldBeDesktopCapture([sourceDescription.deviceId UTF8String])) {
             id<CapturerInterface> camera;
@@ -472,6 +526,9 @@ void VideoCapturerInterfaceImpl::setMaximumFrameRate(int fps) {
 }
 
 int VideoCapturerInterfaceImpl::getRotation() {
+#ifndef WEBRTC_IOS
+    return 0;
+#else
     __block int value = 0;
     VideoCapturerInterfaceImplHolder *implReference = _implReference;
     dispatch_sync(dispatch_get_main_queue(), ^{
@@ -481,6 +538,7 @@ int VideoCapturerInterfaceImpl::getRotation() {
         }
     });
     return value;
+#endif
 }
 
 id VideoCapturerInterfaceImpl::getInternalReference() {

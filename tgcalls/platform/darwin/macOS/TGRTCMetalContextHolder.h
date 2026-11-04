@@ -15,6 +15,7 @@ NS_ASSUME_NONNULL_BEGIN
 -(id __nullable)init;
 -(id<MTLDevice>)device;
 -(id<MTLRenderPipelineState>)pipelineYuvRgb;
+-(id<MTLRenderPipelineState>)pipelineNv12Rgb;
 -(id<MTLRenderPipelineState>)pipelineTransformAndBlend;
 -(id<MTLRenderPipelineState>)pipelineScaleAndBlur;
 -(id<MTLRenderPipelineState>)pipelineThrough;

@@ -69,6 +69,7 @@ public:
     absl::optional<VideoStreamingPartFrame> getFrameAtRelativeTimestamp(VideoStreamingSharedState const *sharedState, double timestamp);
     absl::optional<std::string> getActiveEndpointId() const;
     bool hasRemainingFrames() const;
+    absl::optional<double> nextFramePts() const;
     
     int getAudioRemainingMilliseconds();
     std::vector<AudioStreamingPart::StreamingPartChannel> getAudio10msPerChannel(AudioStreamingPartPersistentDecoder &persistentDecoder);

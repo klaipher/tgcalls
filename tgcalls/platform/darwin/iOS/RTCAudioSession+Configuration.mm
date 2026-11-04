@@ -78,8 +78,7 @@
   if (self.mode != nil && targetMode != nil) {
     targetMode = [NSString stringWithUTF8String:tgcalls::chooseAudioSessionMode(
         std::string(targetMode.UTF8String),
-        std::string(self.mode.UTF8String),
-        tgcalls::CallsRuntimeSwitches::keepSessionMode()).c_str()];
+        std::string(self.mode.UTF8String)).c_str()];
     if (![targetMode isEqualToString:configuration.mode]) {
       RTCLog(@"Keeping audio session mode %@ instead of %@", targetMode, configuration.mode);
     }
@@ -153,8 +152,7 @@
   if (self.isActive &&
       // TODO(tkchin): Figure out which category/mode numChannels is valid for.
       ([self.mode isEqualToString:AVAudioSessionModeVoiceChat] ||
-       (tgcalls::CallsRuntimeSwitches::keepSessionMode() &&
-        [self.mode isEqualToString:AVAudioSessionModeVideoChat]))) {
+       [self.mode isEqualToString:AVAudioSessionModeVideoChat])) {
     // Try to set the preferred number of hardware audio channels. These calls
     // must be done after setting the audio session’s category and mode and
     // activating the session.

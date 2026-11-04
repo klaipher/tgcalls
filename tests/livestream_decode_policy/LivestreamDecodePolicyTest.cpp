@@ -202,9 +202,47 @@ void TestSwitchesDefaultOff() {
     CHECK_TRUE(!CallsRuntimeSwitches::livestreamHardwareDecoding());
 }
 
+// Merged from the Mac decoder policy: small streams stay in software, the output buffer is validated,
+// and the failed stage is remembered for the log.
+void TestSmallStreamsStaySoftware() {
+    auto small = h264_720p();
+    small.width = 640;
+    small.height = 360;
+    CHECK_TRUE(evaluateHardwareDecodeEligibility(small).eligible);
+    small.height = 359;
+    CHECK_TRUE(!evaluateHardwareDecodeEligibility(small).eligible);
+    small.width = 639;
+    small.height = 360;
+    CHECK_TRUE(!evaluateHardwareDecodeEligibility(small).eligible);
+    auto portrait = h264_720p();
+    portrait.width = 360;
+    portrait.height = 640;
+    CHECK_TRUE(evaluateHardwareDecodeEligibility(portrait).eligible);
+}
+
+void TestOutputBufferValidation() {
+    CHECK_TRUE(isAcceptableOutputBuffer(2, 8, true));
+    CHECK_TRUE(!isAcceptableOutputBuffer(3, 8, true));
+    CHECK_TRUE(!isAcceptableOutputBuffer(2, 10, true));
+    CHECK_TRUE(!isAcceptableOutputBuffer(2, 8, false));
+}
+
+void TestFailedStageIsRemembered() {
+    LivestreamDecodeHealth health;
+    CHECK_TRUE(health.onDecodeError(LivestreamDecodeMode::Software, LivestreamDecodeStage::Send) == LivestreamDecodeErrorAction::EndPart);
+    CHECK_TRUE(!health.hardwareFailed());
+    CHECK_TRUE(health.onDecodeError(LivestreamDecodeMode::Hardware, LivestreamDecodeStage::FrameConversion) == LivestreamDecodeErrorAction::FallBackToSoftware);
+    CHECK_TRUE(health.hardwareFailed() && health.failedStage() == LivestreamDecodeStage::FrameConversion);
+    health.onDecodeError(LivestreamDecodeMode::Hardware, LivestreamDecodeStage::Send);
+    CHECK_TRUE(health.failedStage() == LivestreamDecodeStage::FrameConversion);
+}
+
 } // namespace
 
 int main() {
+    TestSmallStreamsStaySoftware();
+    TestOutputBufferValidation();
+    TestFailedStageIsRemembered();
     TestEligibleStreams();
     TestIneligibleStreams();
     TestCounterCapsSessions();

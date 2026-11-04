@@ -3,7 +3,7 @@
 #include "rtc_base/thread.h"
 #include "call/call.h"
 
-#include "CallPowerPolicy.h"
+#include "CallSystemPolicy.h"
 #include "CallsRuntimeSwitches.h"
 
 #include <mutex>
@@ -13,6 +13,7 @@
 #include <pthread/qos.h>
 #endif
 #include <algorithm>
+#include <vector>
 
 namespace tgcalls {
 
@@ -63,6 +64,46 @@ private:
   }
 };
 
+namespace {
+
+std::mutex &registryMutex() {
+  static std::mutex value;
+  return value;
+}
+
+struct RegisteredThread {
+  rtc::Thread *thread = nullptr;
+  systempolicy::EngineThreadRole role = systempolicy::EngineThreadRole::Media;
+  // True once this thread was moved to the policy class, so "off" restores the default class only for
+  // threads this code changed (a thread never touched keeps whatever it was created with).
+  bool qosApplied = false;
+};
+
+std::vector<RegisteredThread> &registry() {
+  static std::vector<RegisteredThread> value;
+  return value;
+}
+
+// The one QoS mechanism of the engine threads (both apps): role-based, read from the switch (default
+// off), applied live. Called with registryMutex held.
+void applyQoSToThread(RegisteredThread &entry) {
+#if defined(__APPLE__) && (TARGET_OS_IOS || TARGET_OS_OSX)
+  const auto qos = systempolicy::engineThreadQos(entry.role, CallsRuntimeSwitches::threadQoS());
+  if (qos == systempolicy::EngineThreadQos::Unchanged && !entry.qosApplied) {
+    return;
+  }
+  const bool raise = qos == systempolicy::EngineThreadQos::UserInitiated;
+  entry.qosApplied = raise;
+  entry.thread->PostTask([raise]() {
+    pthread_set_qos_class_self_np(raise ? QOS_CLASS_USER_INITIATED : QOS_CLASS_DEFAULT, 0);
+  });
+#else
+  (void)entry;
+#endif
+}
+
+}
+
 class ThreadsImpl : public Threads {
   using Thread = std::unique_ptr<rtc::Thread>;
 public:
@@ -71,10 +112,6 @@ public:
     media_ = create("tgc-media" + suffix);
     worker_ = create("tgc-work" + suffix);
     network_ = create_network("tgc-net" + suffix);
-    applyQos(media_.get(), EngineThreadRole::Media);
-    applyQos(worker_.get(), EngineThreadRole::Worker);
-    applyQos(network_.get(), EngineThreadRole::Network);
-      
     media_->AllowInvokesToThread(worker_.get());
     media_->AllowInvokesToThread(network_.get());
     worker_->AllowInvokesToThread(network_.get());
@@ -82,6 +119,26 @@ public:
     //network_->DisallowAllInvokes();
     //worker_->DisallowAllInvokes();
     //worker_->AllowInvokesToThread(network_.get());
+
+    std::unique_lock<std::mutex> lock(registryMutex());
+    registry().push_back({media_.get(), systempolicy::EngineThreadRole::Media});
+    registry().push_back({worker_.get(), systempolicy::EngineThreadRole::Worker});
+    registry().push_back({network_.get(), systempolicy::EngineThreadRole::Network});
+    for (auto &entry : registry()) {
+      if (entry.thread == media_.get() || entry.thread == worker_.get() || entry.thread == network_.get()) {
+        applyQoSToThread(entry);
+      }
+    }
+  }
+
+  ~ThreadsImpl() override {
+    std::unique_lock<std::mutex> lock(registryMutex());
+    auto &threads = registry();
+    for (auto *thread : {media_.get(), worker_.get(), network_.get()}) {
+      threads.erase(std::remove_if(threads.begin(), threads.end(), [thread](const RegisteredThread &entry) {
+        return entry.thread == thread;
+      }), threads.end());
+    }
   }
 
   rtc::Thread *getNetworkThread() override {
@@ -104,21 +161,6 @@ private:
   }
   static Thread create_network(const std::string &name) {
     return init(std::unique_ptr<rtc::Thread>(rtc::Thread::CreateWithSocketServer()), name);
-  }
-
-  // Debug Settings switch "Calls: thread quality of service"; read when the threads are created.
-  static void applyQos(rtc::Thread *thread, EngineThreadRole role) {
-#if TARGET_OS_IOS
-    if (engineThreadQos(role, CallsRuntimeSwitches::threadQoS()) != EngineThreadQos::UserInitiated) {
-      return;
-    }
-    thread->PostTask([]() {
-      pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
-    });
-#else
-    (void)thread;
-    (void)role;
-#endif
   }
 
   static Thread init(Thread value, const std::string &name) {
@@ -148,6 +190,13 @@ std::shared_ptr<Threads> Threads::getThreads(){
 }
 
 namespace StaticThreads {
+
+void applyQoS() {
+  std::unique_lock<std::mutex> lock(registryMutex());
+  for (auto &entry : registry()) {
+    applyQoSToThread(entry);
+  }
+}
 
 rtc::Thread *getNetworkThread() {
   return getThreads()->getNetworkThread();

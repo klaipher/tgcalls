@@ -59,7 +59,9 @@
 #include "v2/ExternalSignalingConnection.h"
 #include "v2/SignalingSctpConnection.h"
 #include "v2/ReflectorRelayPortFactory.h"
+#ifndef TGCALLS_WEBRTC_WITHOUT_TELEGRAM_SEAMS
 #include "v2/MtProtoDtlsTransport.h"
+#endif
 #include "v2/CustomParameters.h"
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
@@ -524,6 +526,15 @@ public:
         _peerConnectionFactory = webrtc::CreateModularPeerConnectionFactory(std::move(peerConnectionFactoryDependencies));
 
         _useMtProto = getCustomParameterBool(_customParameters, "network_use_mtproto");
+#ifdef TGCALLS_WEBRTC_WITHOUT_TELEGRAM_SEAMS
+        // This WebRTC (desktop-app tg_owt) has no Options::external_transport_security
+        // or PeerConnectionDependencies::dtls_transport_factory, so mtproto cannot take
+        // the DTLS slot: keep stock DTLS-SRTP, as builds before MtProtoDtlsTransport did.
+        if (_useMtProto) {
+            RTC_LOG(LS_WARNING) << "network_use_mtproto requested; this WebRTC build has no mtproto DTLS seam, using DTLS-SRTP";
+            _useMtProto = false;
+        }
+#else
         if (_useMtProto) {
             // Half one of two that MUST travel together (the other is the
             // MtProtoDtlsTransportFactory on the dependencies below). Selects the
@@ -535,6 +546,7 @@ public:
             factoryOptions.external_transport_security = true;
             _peerConnectionFactory->SetOptions(factoryOptions);
         }
+#endif
 
         webrtc::PeerConnectionDependencies peerConnectionDependencies(nullptr);
 
@@ -803,10 +815,12 @@ public:
             }
         }
 
+#ifndef TGCALLS_WEBRTC_WITHOUT_TELEGRAM_SEAMS
         if (_useMtProto) {
             // Half two: see the factory option above.
             peerConnectionDependencies.dtls_transport_factory = std::make_unique<MtProtoDtlsTransportFactory>(_encryptionKey);
         }
+#endif
 
         auto peerConnectionOrError = _peerConnectionFactory->CreatePeerConnectionOrError(peerConnectionConfiguration, std::move(peerConnectionDependencies));
         if (peerConnectionOrError.ok()) {

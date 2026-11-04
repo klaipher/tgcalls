@@ -20,6 +20,7 @@
 #include "rtc_base/thread.h"
 #include "api/video/video_sink_interface.h"
 #include "api/video/video_frame.h"
+#include "api/video/color_space.h"
 #include "modules/desktop_capture/desktop_and_cursor_composer.h"
 #include "modules/desktop_capture/desktop_capturer.h"
 #include "system_wrappers/include/clock.h"
@@ -219,10 +220,16 @@ void SourceFrameCallbackImpl::OnCaptureResult(
 
 	assert(i420Result == 0);
 	(void)i420Result;
-	webrtc::VideoFrame nativeVideoFrame = webrtc::VideoFrame(
-		i420_buffer_,
-		webrtc::kVideoRotation_0,
-        webrtc::Clock::GetRealTimeClock()->CurrentTime().us());
+	webrtc::VideoFrame nativeVideoFrame = webrtc::VideoFrame::Builder()
+		.set_video_frame_buffer(i420_buffer_)
+		.set_rotation(webrtc::kVideoRotation_0)
+		.set_timestamp_us(webrtc::Clock::GetRealTimeClock()->CurrentTime().us())
+		.set_color_space(webrtc::ColorSpace(
+			webrtc::ColorSpace::PrimaryID::kBT709,
+			webrtc::ColorSpace::TransferID::kIEC61966_2_1,
+			webrtc::ColorSpace::MatrixID::kSMPTE170M,
+			webrtc::ColorSpace::RangeID::kLimited))
+		.build();
 	if (const auto sink = _sink.get()) {
 		sink->OnFrame(nativeVideoFrame);
 	}
