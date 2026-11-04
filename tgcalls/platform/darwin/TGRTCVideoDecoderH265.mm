@@ -32,6 +32,7 @@
 #include "rtc_base/thread.h"
 #include "sdk/objc/components/video_codec/nalu_rewriter.h"
 #include "h265_nalu_rewriter.h"
+#include "TGRTCVideoRecovery.h"
 
 #include "StaticThreads.h"
 
@@ -111,6 +112,8 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
   TGRTCVideoDecoderH265RequestKeyframeHolder *_requestKeyframeHolder;
   TGRTCVideoDecoderRequestKeyframeCallback _requestFrame;
   OSStatus _error;
+  // At most 3 session resets per 10 s; after that the frame fails and the caller asks for a keyframe.
+  tgcalls::videorecovery::ResetLimiter _resetLimiter;
 }
 
 - (instancetype)init {
@@ -213,6 +216,7 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
   // Re-initialize the decoder if we have an invalid session while the app is
   // active and retry the decode request.
   if (status == kVTInvalidSessionErr &&
+      _resetLimiter.tryReset(rtc::TimeMillis()) &&
       [self resetDecompressionSession] == WEBRTC_VIDEO_CODEC_OK) {
     frameDecodeParams.reset(
         new RTCH265FrameDecodeParams(_callback, inputImage.timeStamp, _requestFrame));

@@ -37,6 +37,7 @@
 #include "sdk/objc/Framework/Classes/VideoToolbox/nalu_rewriter.h"
 #include "system_wrappers/include/clock.h"
 #include "h265_nalu_rewriter.h"
+#include "TGRTCVideoRecovery.h"
 
 @interface RTC_OBJC_TYPE (RTCVideoEncoderH265)
 ()
@@ -179,6 +180,8 @@ void compressionOutputCallback(void* encoder,
   std::unique_ptr<webrtc::BitrateAdjuster> _bitrateAdjuster;
   uint32_t _targetBitrateBps;
   uint32_t _encoderBitrateBps;
+  // The pool-less session reset below, at most 3 per 10 s.
+  tgcalls::videorecovery::ResetLimiter _poolResetLimiter;
   CFStringRef _profile;
   RTCVideoEncoderCallback _callback;
   int32_t _width;
@@ -221,7 +224,8 @@ void compressionOutputCallback(void* encoder,
   _mode = settings.mode;
 
   // We can only set average bitrate on the HW encoder.
-  _targetBitrateBps = settings.startBitrate;
+  // startBitrate is in kbps, like the value setBitrate: receives.
+  _targetBitrateBps = tgcalls::videorecovery::bitrateBpsFromKbps(settings.startBitrate);
   _bitrateAdjuster->SetTargetBitrateBps(_targetBitrateBps);
 
   // TODO(tkchin): Try setting payload size via
@@ -245,7 +249,7 @@ void compressionOutputCallback(void* encoder,
       VTCompressionSessionGetPixelBufferPool(_compressionSession);
 
 #if defined(WEBRTC_IOS)
-  if (!pixelBufferPool) {
+  if (!pixelBufferPool && _poolResetLimiter.tryReset(rtc::TimeMillis())) {
     // Kind of a hack. On backgrounding, the compression session seems to get
     // invalidated, which causes this pool call to fail when the application
     // is foregrounded and frames are being sent for encoding again.

@@ -28,6 +28,7 @@
 #include "rtc_base/logging.h"
 #include "rtc_base/time_utils.h"
 #include "sdk/objc/components/video_codec/nalu_rewriter.h"
+#include "TGRTCVideoRecovery.h"
 
 // Struct that we pass to the decoder per frame to decode. We receive it again
 // in the decoder callback.
@@ -79,6 +80,9 @@ static void decompressionOutputCallback(void *decoderRef,
   VTDecompressionSessionRef _decompressionSession;
   RTCVideoDecoderCallback _callback;
   OSStatus _error;
+  // A session that keeps failing is reset at most 3 times per 10 s; after that the frame fails (the caller
+  // asks for a keyframe or falls back) instead of rebuilding the session on every frame.
+  tgcalls::videorecovery::ResetLimiter _resetLimiter;
 }
 
 - (instancetype)init {
@@ -153,6 +157,7 @@ static void decompressionOutputCallback(void *decoderRef,
   // Re-initialize the decoder if we have an invalid session while the app is
   // active or decoder malfunctions and retry the decode request.
   if ((status == kVTInvalidSessionErr || status == kVTVideoDecoderMalfunctionErr) &&
+      _resetLimiter.tryReset(rtc::TimeMillis()) &&
       [self resetDecompressionSession] == WEBRTC_VIDEO_CODEC_OK) {
     RTC_LOG(LS_INFO) << "Failed to decode frame with code: " << status
                      << " retrying decode after decompression session reset";

@@ -47,6 +47,7 @@ let package = Package(
                       "tgcalls/group/StreamRenderPolicyTest.cpp",
                       "tgcalls/platform/darwin/CaptureFramePolicyTest.cpp",
                       "tgcalls/platform/darwin/EncoderModePolicyTest.cpp",
+                      "tgcalls/platform/darwin/TGRTCVideoRecoveryPolicyTest.cpp",
                       "tgcalls/legacy/InstanceImplLegacy.h",
                       "tgcalls/legacy/InstanceImplLegacy.cpp"
                      ],
