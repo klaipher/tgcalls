@@ -281,14 +281,16 @@ public:
             return StreamRenderActivity::Idle;
         }
         const auto &segment = _availableSegments[0];
+        // Suspended video is not decoded (render() skips it), so it must not hold the tick at the video rate.
+        const bool isVideoSuspended = isLivestreamVideoSuspended();
         bool videoPlaying = false;
         for (const auto &videoSegment : segment->video) {
             const auto endpointId = videoSegment->part->getActiveEndpointId();
-            if (endpointId.has_value() && shouldDecodeStreamVideo(liveStreamSinkCount(_videoSinks, endpointId.value()))) {
+            if (endpointId.has_value() && shouldDecodeStreamVideo(liveStreamSinkCount(_videoSinks, endpointId.value()), isVideoSuspended)) {
                 videoPlaying = true;
             }
         }
-        if (!segment->unified.empty() && shouldDecodeStreamVideo(liveStreamSinkCount(_videoSinks, "unified"))) {
+        if (!segment->unified.empty() && shouldDecodeStreamVideo(liveStreamSinkCount(_videoSinks, "unified"), isVideoSuspended)) {
             videoPlaying = true;
         }
         const bool audioPlaying = segment->audio || segment->unifiedAudio;

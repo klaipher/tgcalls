@@ -64,10 +64,12 @@ inline int streamRenderDelayMs(StreamRenderActivity activity, int ringCapacityMs
     return std::max(1, std::min(delay, ringCapacityMs / 2));
 }
 
-// Frames are decoded only for a stream that has a live sink; hardware sessions and CPU are not
-// spent on tiles nobody shows. The decoder resumes at the next part, which starts on a keyframe.
-inline bool shouldDecodeStreamVideo(size_t liveSinkCount) {
-    return liveSinkCount > 0;
+// Frames are decoded only for a stream that has a live sink and is not suspended (the app reports a hidden
+// window with CallsRuntimeSwitches::livestreamVideoSuspended while the views keep their sinks); hardware sessions
+// and CPU are not spent on tiles nobody shows, and the render tick does not follow video that is not decoded.
+// The decoder resumes at the next part, which starts on a keyframe.
+inline bool shouldDecodeStreamVideo(size_t liveSinkCount, bool videoSuspended = false) {
+    return liveSinkCount > 0 && !videoSuspended;
 }
 
 // Upper bound on frames decoded for one stream in one render tick. Playing at 60 fps needs one or two;

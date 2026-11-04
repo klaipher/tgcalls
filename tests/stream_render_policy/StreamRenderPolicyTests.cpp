@@ -91,6 +91,18 @@ void TestActivityFollowsWhatPlays() {
     CHECK_TRUE(streamRenderActivity(true, true) == StreamRenderActivity::Video);
 }
 
+// A stream whose window is hidden (livestreamVideoSuspended) decodes no video even though its views keep their
+// sinks, so the render tick must not follow video: with audio it is the 40 ms audio tick, not the 8 ms floor
+// that an unknown next frame would give.
+void TestSuspendedVideoDoesNotDriveTheTick() {
+    CHECK_TRUE(shouldDecodeStreamVideo(1, false));
+    CHECK_TRUE(!shouldDecodeStreamVideo(1, true));
+    CHECK_TRUE(!shouldDecodeStreamVideo(0, true));
+    const auto activity = streamRenderActivity(true, shouldDecodeStreamVideo(2, true));
+    CHECK_TRUE(activity == StreamRenderActivity::AudioOnly);
+    CHECK_TRUE(streamRenderDelayMs(activity, kStreamAudioRingCapacityMs, -1.0) == 40);
+}
+
 struct Sink {};
 
 void TestSinkListsDropExpiredSinksAndCountLiveOnes() {
@@ -174,6 +186,7 @@ int main() {
     TestTickNeverLetsTheAudioRingDrainBelowHalf();
     TestIdleStillPollsForNewSegments();
     TestActivityFollowsWhatPlays();
+    TestSuspendedVideoDoesNotDriveTheTick();
     TestSinkListsDropExpiredSinksAndCountLiveOnes();
     TestDecodeOnlyWhenWatched();
     if (g_failures == 0) {
