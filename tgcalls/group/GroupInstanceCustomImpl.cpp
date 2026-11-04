@@ -1553,7 +1553,8 @@ public:
 #endif
 
         webrtc::AudioProcessing::Config apmConfig;
-        if (audiopolicy::applyDigitalMicGain(apmConfig)) {
+        const bool apmConfigChanged = audiopolicy::applyDigitalMicGain(apmConfig);
+        if (apmConfigChanged) {
             RTC_LOG(LS_INFO) << "Group call audio processing policy: digital AGC2";
         }
 
@@ -1576,14 +1577,14 @@ public:
             builder.SetCapturePostProcessing(std::move(audioProcessor));
 
             builder.SetEchoDetector(rtc::make_ref_counted<CustomEchoDetector>());
-            if (apmPolicy.changesConfig()) {
+            if (apmConfigChanged) {
                 builder.SetConfig(apmConfig);
             }
 
             peerConnectionFactoryDeps.audio_processing = builder.Create();
         }
 #endif
-        if (!peerConnectionFactoryDeps.audio_processing && apmPolicy.changesConfig() && _videoContentType != VideoContentType::Screencast) {
+        if (!peerConnectionFactoryDeps.audio_processing && apmConfigChanged && _videoContentType != VideoContentType::Screencast) {
             // Otherwise the engine builds its own default processing module, without the policy.
             peerConnectionFactoryDeps.audio_processing = webrtc::AudioProcessingBuilder().SetConfig(apmConfig).Create();
         }
@@ -1990,10 +1991,14 @@ public:
             // Which suppressors run in a group call (WebRTC, RNNoise, both) comes first; the iOS system
             // voice-processing choice may then drop the WebRTC one when that unit is really active.
             const auto noise = audiopolicy::resolveGroupNoise(_groupNoiseMode, _userNoiseSuppressionEnabled, true);
+            bool audioInputExpected = true;
+#ifdef WEBRTC_IOS
+            audioInputExpected = !_disableAudioInput;
+#endif
             const auto processing = chooseCaptureProcessing(
                 CallsRuntimeSwitches::systemNoiseSuppression(),
                 kAudioCallPolicyIsIosBuild,
-                !_disableAudioInput,
+                audioInputExpected,
                 SystemVoiceProcessingLatch::failed()
             );
             audioOptions.noise_suppression = noise.apmNoiseSuppression && processing.softwareNoiseSuppression;
