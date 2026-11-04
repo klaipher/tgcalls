@@ -183,7 +183,17 @@
     NSMutableArray<AVCaptureDeviceFormat *> *sortedFormats = [NSMutableArray arrayWithArray:[[VideoCameraCapturer supportedFormatsForDevice:selectedCamera] sortedArrayUsingComparator:^NSComparisonResult(AVCaptureDeviceFormat* lhs, AVCaptureDeviceFormat *rhs) {
         int32_t width1 = CMVideoFormatDescriptionGetDimensions(lhs.formatDescription).width;
         int32_t width2 = CMVideoFormatDescriptionGetDimensions(rhs.formatDescription).width;
-        return width1 < width2 ? NSOrderedAscending : NSOrderedDescending;
+        if (width1 != width2) {
+            return width1 < width2 ? NSOrderedAscending : NSOrderedDescending;
+        }
+        // Same width: video-range (420v) first, so the choice does not depend on how the sort
+        // happens to order equal elements. Equal in every other respect compares as the same.
+        bool lhsFull = CMFormatDescriptionGetMediaSubType(lhs.formatDescription) == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+        bool rhsFull = CMFormatDescriptionGetMediaSubType(rhs.formatDescription) == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+        if (lhsFull != rhsFull) {
+            return lhsFull ? NSOrderedDescending : NSOrderedAscending;
+        }
+        return NSOrderedSame;
     }]];
     for (int i = (int)[sortedFormats count] - 1; i >= 0; i--) {
         if ([[sortedFormats[i] description] containsString:@"x420"]) {

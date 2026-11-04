@@ -985,6 +985,13 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     [NSMutableOrderedSet orderedSetWithArray:videoDataOutput.availableVideoCVPixelFormatTypes];
     [availablePixelFormats intersectSet:supportedPixelFormats];
     NSNumber *pixelFormat = availablePixelFormats.firstObject;
+#if TARGET_OS_IOS
+    // The I420 copy is tagged limited range BT.601 by the encoders, so the camera output must really be
+    // video range. AVCaptureVideoDataOutput converts a full-range (420f) camera format in hardware.
+    if ([availablePixelFormats containsObject:@(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)]) {
+        pixelFormat = @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
+    }
+#endif
     NSAssert(pixelFormat, @"Output device has no supported formats.");
     
     _preferredOutputPixelFormat = [pixelFormat unsignedIntValue];
@@ -1000,6 +1007,13 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     if (![[TGRTCCVPixelBuffer supportedPixelFormats] containsObject:@(mediaSubType)]) {
         mediaSubType = _preferredOutputPixelFormat;
     }
+#if TARGET_OS_IOS
+    // Always video range (see setupVideoDataOutput): a 420f camera format is converted by the output.
+    if (mediaSubType == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange &&
+        [_videoDataOutput.availableVideoCVPixelFormatTypes containsObject:@(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)]) {
+        mediaSubType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+    }
+#endif
     
     if (mediaSubType != _outputPixelFormat) {
         _outputPixelFormat = mediaSubType;
