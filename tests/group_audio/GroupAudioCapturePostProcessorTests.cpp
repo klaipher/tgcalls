@@ -1,5 +1,7 @@
 #include "group/GroupAudioCapturePostProcessor.h"
+#include "CallsRuntimeSwitches.h"
 
+#include "common_audio/resampler/push_sinc_resampler.h"
 #include "modules/audio_processing/audio_buffer.h"
 
 #include <atomic>
@@ -166,6 +168,87 @@ static void noiseSuppressionOnDenoisesAt48kHz() {
     expect(std::fabs(harness.peak() - before * 0.5f) < 1.0f, "the denoised 48 kHz frame replaces the capture buffer");
 }
 
+
+// Group calls on 8/16 kHz capture (Bluetooth headsets): the round trip through the 48 kHz-based RNNoise
+// stage is a switch. Off discards the processed signal as the engine did before the Mac fixes.
+static void narrowbandResultIsDiscardedWithTheSwitchOff() {
+    tgcalls::CallsRuntimeSwitches::setGroupNarrowbandProcessing(false);
+    Harness harness(16000, true);
+    denoiseCalls = 0;
+    float before = 0.0f;
+    for (int frame = 0; frame < 50; frame++) {
+        harness.fill(8000.0f, frame);
+        before = harness.peak();
+        harness.process();
+    }
+    expect(denoiseCalls == 50, "narrowband: RNNoise still feeds the speech detector with the switch off");
+    expect(std::fabs(harness.peak() - before) < 1.0f, "narrowband: the capture buffer is untouched with the switch off");
+    tgcalls::CallsRuntimeSwitches::setGroupNarrowbandProcessing(true);
+}
+
+static void narrowbandExternalSamplesAreNotMixedWithTheSwitchOff() {
+    tgcalls::CallsRuntimeSwitches::setGroupNarrowbandProcessing(false);
+    std::vector<float> external;
+    webrtc::Mutex mutex;
+    Harness harness(16000, false, &external, &mutex);
+    for (int frame = 0; frame < 50; frame++) {
+        {
+            webrtc::MutexLock lock(&mutex);
+            external.assign(480, 4000.0f);
+        }
+        harness.fill(0.0f, frame);
+        harness.process();
+    }
+    expect(harness.peak() < 1.0f, "narrowband: external samples are not mixed in with the switch off");
+    tgcalls::CallsRuntimeSwitches::setGroupNarrowbandProcessing(true);
+}
+
+static void narrowbandSwitchDefaultsToOnOnMac() {
+    expect(tgcalls::CallsRuntimeSwitches::groupNarrowbandProcessing(), "narrowband: on by default on macOS");
+}
+
+// RNNoise is skipped for a frame below its noise gate. The old code then skipped the way back to capture
+// rate too, so that resampler's history went stale and the next frame clicked and the delay alternated.
+// While the round trip is active every frame must go through both resamplers. The reference below is an
+// independent round trip of every frame (the mock RNNoise halves a frame, and only frames above the gate).
+static void narrowbandQuietFramesKeepTheRoundTripContinuous() {
+    tgcalls::CallsRuntimeSwitches::setGroupNarrowbandProcessing(true);
+    Harness harness(16000, true);
+    const size_t captureFrames = harness.buffer.num_frames();
+    const size_t processingFrames = 480;
+    webrtc::PushSincResampler up(captureFrames, processingFrames);
+    webrtc::PushSincResampler down(processingFrames, captureFrames);
+    std::vector<float> processing(processingFrames), expected(captureFrames);
+    float worstDifference = 0.0f;
+    int quietFramesAfterTone = 0;
+    for (int frame = 0; frame < 80; frame++) {
+        // Frames 30...39 are below the RNNoise gate (peak < 0.01) once the resampler tail has died out.
+        float amplitude = (frame >= 30 && frame < 40) ? 0.005f : 8000.0f;
+        harness.fill(amplitude, frame);
+        std::vector<float> input(harness.buffer.channels_const()[0], harness.buffer.channels_const()[0] + captureFrames);
+        up.Resample(input.data(), captureFrames, processing.data(), processingFrames);
+        float peak = 0.0f;
+        for (float value : processing) {
+            peak = std::max(peak, std::fabs(value));
+        }
+        if (peak >= 0.01f) {
+            for (float &value : processing) {
+                value *= 0.5f;
+            }
+        } else if (frame >= 30) {
+            quietFramesAfterTone++;
+        }
+        down.Resample(processing.data(), processingFrames, expected.data(), captureFrames);
+        harness.process();
+        const float *actual = harness.buffer.channels_const()[0];
+        for (size_t i = 0; i < captureFrames; i++) {
+            worstDifference = std::max(worstDifference, std::fabs(actual[i] - expected[i]));
+        }
+    }
+    expect(quietFramesAfterTone > 0, "narrowband: the test signal contains frames RNNoise skips");
+    expect(worstDifference < 0.0001f, "narrowband: every frame, skipped ones included, is a full resampler round trip");
+}
+
 static void noiseSuppressionOnDenoisesAt16kHz() {
     Harness harness(16000, true);
     denoiseCalls = 0;
@@ -219,6 +302,10 @@ int main() {
     noiseSuppressionOffDetectsSpeechFromPeaks();
     peakSpeechDetectorFollowsTheNoiseFloor();
     noiseSuppressionOnDenoisesAt48kHz();
+    narrowbandSwitchDefaultsToOnOnMac();
+    narrowbandResultIsDiscardedWithTheSwitchOff();
+    narrowbandExternalSamplesAreNotMixedWithTheSwitchOff();
+    narrowbandQuietFramesKeepTheRoundTripContinuous();
     noiseSuppressionOnDenoisesAt16kHz();
     externalSamplesReachTheCaptureBufferAt16kHz();
     processingAllocatesNothingPerFrame();

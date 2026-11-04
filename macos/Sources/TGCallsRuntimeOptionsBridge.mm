@@ -2,6 +2,7 @@
 
 #include "platform/darwin/TGCallsRuntimeOptions.h"
 #include "CallAudioPolicy.h"
+#include "CallsRuntimeSwitches.h"
 #include "VideoCaptureInterfaceImpl.h"
 #include "StaticThreads.h"
 #include "modules/audio_device/mac/audio_device_mac_options.h"
@@ -26,6 +27,14 @@
 
 + (void)setScreencastHardwareEncoderEnabled:(BOOL)enabled {
     tgcalls::RuntimeOptions::screencastHardwareEncoder().store(enabled);
+}
+
++ (void)setEncoderLowLatencyEnabled:(BOOL)enabled {
+    tgcalls::CallsRuntimeSwitches::setEncoderLowLatency(enabled);
+}
+
++ (void)setGroupNarrowbandProcessingEnabled:(BOOL)enabled {
+    tgcalls::CallsRuntimeSwitches::setGroupNarrowbandProcessing(enabled);
 }
 
 + (void)setGroupNoiseMode:(NSInteger)mode {

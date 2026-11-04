@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "CallsRuntimeSwitches.h"
 #include "common_audio/resampler/push_sinc_resampler.h"
 #include "modules/audio_processing/audio_buffer.h"
 
@@ -96,8 +97,17 @@ void AudioCapturePostProcessor::Process(webrtc::AudioBuffer *buffer) {
         _resamplerCaptureFrames = captureFrames;
     }
     _toProcessingRate->Resample(buffer->channels()[0], captureFrames, _processingSamples.data(), processingFrames);
-    if (processAtProcessingRate(_processingSamples.data())) {
-        _fromProcessingRate->Resample(_processingSamples.data(), processingFrames, buffer->channels()[0], captureFrames);
+    const bool modified = processAtProcessingRate(_processingSamples.data());
+    // Narrowband capture (8/16 kHz, Bluetooth headsets): the processed signal replaces the capture buffer only
+    // while the switch is on (default on for macOS). Off discards it and RNNoise only feeds the speech
+    // detector. While the round trip is on, every frame goes through both resamplers, including the ones
+    // RNNoise skipped for being quiet: skipping the way back let that resampler's history go stale, which
+    // clicked and made the delay alternate between the two paths.
+    if (CallsRuntimeSwitches::groupNarrowbandProcessing()) {
+        const bool roundTrip = modified || (_noiseSuppressionConfiguration && _noiseSuppressionConfiguration->isEnabled);
+        if (roundTrip) {
+            _fromProcessingRate->Resample(_processingSamples.data(), processingFrames, buffer->channels()[0], captureFrames);
+        }
     }
 }
 

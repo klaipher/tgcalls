@@ -12,6 +12,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)setHardwareCropEnabled:(BOOL)enabled;
 + (void)setNativeDecodeFormatEnabled:(BOOL)enabled;
 + (void)setScreencastHardwareEncoderEnabled:(BOOL)enabled;
+// Kill switch for H.264 low-latency rate control (default on). Applies to the next encoder session.
++ (void)setEncoderLowLatencyEnabled:(BOOL)enabled;
+// Group calls keep the processed signal of an 8/16 kHz (Bluetooth) microphone (default on). Applies to the next group call.
++ (void)setGroupNarrowbandProcessingEnabled:(BOOL)enabled;
 
 // Batch B audio. All four apply to the next call and never change what is negotiated.
 // mode: 0 = both suppressors (default), 1 = WebRTC suppressor only, 2 = RNNoise only.
