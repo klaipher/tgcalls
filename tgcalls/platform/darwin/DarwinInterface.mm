@@ -90,8 +90,7 @@ std::unique_ptr<webrtc::VideoDecoderFactory> DarwinInterface::makeVideoDecoderFa
 }
 
 // Which codecs this device offers a legacy (v1) peer as encoders. The decision is DarwinCodecSupport.h (host-tested in
-// tests/darwin_codec_support): H.264 is always offered, which makes v1 calls on arm64 use the hardware VideoToolbox
-// encoder (the old rule said NO on arm64, a leftover of early M1 Macs that leaked to iOS); VP8 and VP9 stay offered.
+// tests/darwin_codec_support) and keeps the upstream rule.
 bool DarwinInterface::supportsEncoding(const std::string &codecName) {
     DarwinEncodingFacts facts;
 #ifdef WEBRTC_IOS

@@ -16,11 +16,9 @@ struct DarwinEncodingFacts {
     bool h265Compiled = false;
 };
 
-// H.264 is always offered: the encoder factory always lists it, and the
-// call path (SimulcastVideoEncoderFactory) creates the VideoToolbox hardware
-// encoder on Apple Silicon. The old check returned NO on arm64 (it was
-// written in 2021 for early M1 Macs, when H.265 was preferred there), which
-// left old peers with software VP8/VP9 only. VP8 stays in the list.
+// The upstream rule, unchanged: H.264 is offered only on x86_64 (so arm64 devices offer a v1 peer
+// H.265/VP8/VP9). What a legacy call offers is interop; offering H.264 on arm64 (the hardware encoder)
+// waits for the owner's decision.
 inline bool darwinSupportsEncoding(const std::string &codecName, const DarwinEncodingFacts &facts) {
     if (codecName == "H265") {
         if (!facts.h265Compiled) {
@@ -28,7 +26,10 @@ inline bool darwinSupportsEncoding(const std::string &codecName, const DarwinEnc
         }
         return facts.isIos ? facts.hevcPresetAvailable : !facts.isX86_64;
     }
-    if (codecName == "H264" || codecName == "VP8" || codecName == "VP9") {
+    if (codecName == "H264") {
+        return facts.isX86_64;
+    }
+    if (codecName == "VP8" || codecName == "VP9") {
         return true;
     }
     return false;
