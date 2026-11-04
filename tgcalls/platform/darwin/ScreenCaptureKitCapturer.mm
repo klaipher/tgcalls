@@ -10,12 +10,18 @@
 #import "components/video_frame_buffer/RTCCVPixelBuffer.h"
 
 #import "ScreenCaptureKitConfiguration.h"
+#include "ScreenShareResendPolicy.h"
 #import "TGRTCCVPixelBuffer.h"
 #include "DarwinVideoSource.h"
 
 static NSString *const TGScreenCaptureLegacyDefaultsKey = @"tgcalls.useLegacyScreenCapture";
 static const CGSize TGScreenCaptureBoundingSize = { 1920.0, 1080.0 };
 static const double TGScreenCaptureFramesPerSecond = 25.0;
+
+static int64_t TGScreenCaptureHostClockNs() {
+    CMTime now = CMClockGetTime(CMClockGetHostTimeClock());
+    return (int64_t)(CMTimeGetSeconds(now) * (double)rtc::kNumNanosecsPerSec);
+}
 
 static tgcalls::DarwinVideoTrackSource *getScreenCaptureVideoSource(const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
     webrtc::VideoTrackSourceProxy *proxySource = static_cast<webrtc::VideoTrackSourceProxy *>(nativeSource.get());
@@ -37,6 +43,11 @@ static tgcalls::DarwinVideoTrackSource *getScreenCaptureVideoSource(const rtc::s
     NSInteger _generation;
     bool _isRunning;
     bool _isPaused;
+    // Touched on _queue only. ScreenCaptureKit sends a frame only when the screen changed, so the last one is
+    // sent again while the screen stands still (see StillScreenRepeater).
+    tgcalls::StillScreenRepeater _repeater;
+    RTCVideoFrame *_lastVideoFrame;
+    dispatch_source_t _repeatTimer;
 }
 
 + (bool)isEnabled {
@@ -55,6 +66,9 @@ static tgcalls::DarwinVideoTrackSource *getScreenCaptureVideoSource(const rtc::s
 }
 
 - (void)dealloc {
+    if (_repeatTimer != nil) {
+        dispatch_source_cancel(_repeatTimer);
+    }
     [_stream stopCaptureWithCompletionHandler:nil];
 }
 
@@ -149,6 +163,7 @@ static tgcalls::DarwinVideoTrackSource *getScreenCaptureVideoSource(const rtc::s
         return;
     }
     _stream = stream;
+    [self startRepeating];
     __weak ScreenCaptureKitCapturer *weakSelf = self;
     [stream startCaptureWithCompletionHandler:^(NSError *error) {
         if (error != nil) {
@@ -168,6 +183,50 @@ static tgcalls::DarwinVideoTrackSource *getScreenCaptureVideoSource(const rtc::s
     SCStream *stream = _stream;
     _stream = nil;
     [stream stopCaptureWithCompletionHandler:nil];
+    [self stopRepeating];
+}
+
+- (void)startRepeating {
+    dispatch_async(_queue, ^{
+        if (self->_repeatTimer != nil) {
+            return;
+        }
+        dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, self->_queue);
+        uint64_t interval = (uint64_t)tgcalls::StillScreenRepeater::kIntervalNs;
+        dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)interval), interval, interval / 10);
+        __weak ScreenCaptureKitCapturer *weakSelf = self;
+        dispatch_source_set_event_handler(timer, ^{
+            [weakSelf resendLastFrameIfStill];
+        });
+        self->_repeatTimer = timer;
+        dispatch_resume(timer);
+    });
+}
+
+- (void)stopRepeating {
+    dispatch_async(_queue, ^{
+        if (self->_repeatTimer != nil) {
+            dispatch_source_cancel(self->_repeatTimer);
+            self->_repeatTimer = nil;
+        }
+        self->_repeater.reset();
+        self->_lastVideoFrame = nil;
+    });
+}
+
+// On _queue. Hands the last frame to the encoder again when the screen has not changed for an interval, so a
+// viewer who joins or a keyframe request after loss still gets a picture.
+- (void)resendLastFrameIfStill {
+    if (_lastVideoFrame == nil) {
+        return;
+    }
+    int64_t clockNs = TGScreenCaptureHostClockNs();
+    int64_t timeStampNs = 0;
+    if (!_repeater.takeResend(clockNs, &timeStampNs)) {
+        return;
+    }
+    RTCVideoFrame *repeated = [[RTCVideoFrame alloc] initWithBuffer:_lastVideoFrame.buffer rotation:RTCVideoRotation_0 timeStampNs:timeStampNs];
+    getScreenCaptureVideoSource(_trackSource)->OnCapturedFrame(repeated);
 }
 
 - (void)reportFatalError {
@@ -206,6 +265,10 @@ static tgcalls::DarwinVideoTrackSource *getScreenCaptureVideoSource(const rtc::s
                                 .build());
     }
     getScreenCaptureVideoSource(_trackSource)->OnCapturedFrame(videoFrame);
+    // Kept even when the frame adapter dropped this one: the next repeat then carries the newest picture.
+    _lastVideoFrame = videoFrame;
+    int64_t clockNs = TGScreenCaptureHostClockNs();
+    _repeater.noteFrameSent(clockNs, timeStampNs);
 }
 
 @end
