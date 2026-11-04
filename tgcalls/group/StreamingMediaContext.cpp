@@ -323,6 +323,7 @@ public:
                 videoSegment->isPlaying = true;
                 cancelPendingVideoQualityUpdate(videoSegment);
                 if (isVideoSuspended) {
+                    noteSkippedPart(videoSegment->part->getActiveEndpointId());
                     continue;
                 }
                 
@@ -361,6 +362,7 @@ public:
             for (auto &videoSegment : segment->unified) {
                 videoSegment->isPlaying = true;
                 if (isVideoSuspended) {
+                    noteSkippedPart(absl::optional<std::string>("unified"));
                     continue;
                 }
                 
@@ -581,6 +583,18 @@ public:
 
         requestSegmentsIfNeeded();
         checkPendingSegments();
+    }
+
+    // Video that is not decoded because the window is hidden: the decoder of that endpoint is flushed before
+    // it decodes again, so nothing from before the gap is referenced (each part starts on a keyframe).
+    void noteSkippedPart(absl::optional<std::string> const &endpointId) {
+        if (!endpointId.has_value()) {
+            return;
+        }
+        auto it = _sharedVideoStateByEndpointId.find(endpointId.value());
+        if (it != _sharedVideoStateByEndpointId.end()) {
+            it->second->noteSkippedPart();
+        }
     }
 
     static bool isLivestreamVideoSuspended() {
