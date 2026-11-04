@@ -1,4 +1,5 @@
 #include "DarwinInterface.h"
+#include "DarwinCodecSupport.h"
 #include "CallsRuntimeSwitches.h"
 #include "rtc_base/logging.h"
 
@@ -88,37 +89,27 @@ std::unique_ptr<webrtc::VideoDecoderFactory> DarwinInterface::makeVideoDecoderFa
     return CustomObjCToNativeVideoDecoderFactory([[TGRTCDefaultVideoDecoderFactory alloc] init]);
 }
 
+// Which codecs this device offers a legacy (v1) peer as encoders. The decision is DarwinCodecSupport.h (host-tested in
+// tests/darwin_codec_support): H.264 is always offered, which makes v1 calls on arm64 use the hardware VideoToolbox
+// encoder (the old rule said NO on arm64, a leftover of early M1 Macs that leaked to iOS); VP8 and VP9 stay offered.
 bool DarwinInterface::supportsEncoding(const std::string &codecName) {
-    if (false) {
-    }
-#ifndef WEBRTC_DISABLE_H265
-    else if (codecName == cricket::kH265CodecName) {
+    DarwinEncodingFacts facts;
 #ifdef WEBRTC_IOS
-		if (@available(iOS 11.0, *)) {
-			return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
-		}
-#elif defined WEBRTC_MAC // WEBRTC_IOS
-        
-#ifdef __x86_64__
-        return NO;
-#else
-        return YES;
-#endif
-#endif // WEBRTC_IOS || WEBRTC_MAC
+    facts.isIos = true;
+#ifndef WEBRTC_DISABLE_H265
+    if (codecName == cricket::kH265CodecName) {
+        // Only asked for H.265: the export preset list is not free to build.
+        facts.hevcPresetAvailable = [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
     }
 #endif
-    else if (codecName == cricket::kH264CodecName) {
-#ifdef __x86_64__
-        return YES;
-#else
-        return NO;
 #endif
-    } else if (codecName == cricket::kVp8CodecName) {
-        return true;
-    } else if (codecName == cricket::kVp9CodecName) {
-        return true;
-    }
-    return false;
+#ifdef __x86_64__
+    facts.isX86_64 = true;
+#endif
+#ifndef WEBRTC_DISABLE_H265
+    facts.h265Compiled = true;
+#endif
+    return darwinSupportsEncoding(codecName, facts);
 }
 
 webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> DarwinInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {
