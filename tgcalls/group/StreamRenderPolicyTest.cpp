@@ -84,9 +84,40 @@ void TestDecodeOnlyWhenWatched() {
     CHECK_TRUE(!shouldDecodeStreamVideo(0));
 }
 
+// A tile that was hidden and is shown again mid-part has to decode every frame between where the part
+// stopped and "now". Done in one render tick that stalls the media thread (and the audio refill with it),
+// so a tick decodes a bounded number of frames and catches up over the following ticks.
+void TestCatchUpIsBoundedPerTick() {
+    int decoded = 0;
+    while (mayDecodeAnotherStreamFrame(decoded)) {
+        decoded++;
+        CHECK_TRUE(decoded <= kMaxStreamFramesDecodedPerTick);
+    }
+    CHECK_TRUE(decoded == kMaxStreamFramesDecodedPerTick);
+    // Normal playback needs one or two frames per tick, far below the bound.
+    CHECK_TRUE(kMaxStreamFramesDecodedPerTick >= 4);
+    CHECK_TRUE(mayDecodeAnotherStreamFrame(0));
+    CHECK_TRUE(mayDecodeAnotherStreamFrame(2));
+}
+
+// A part skipped while nobody watched leaves the decoder with references from before the gap; it is
+// flushed once, before it decodes again.
+void TestSkippedPartFlushesTheDecoderOnce() {
+    SkippedPartFlag flag;
+    CHECK_TRUE(!flag.consumeFlushNeeded());
+    flag.noteSkipped();
+    flag.noteSkipped();
+    CHECK_TRUE(flag.consumeFlushNeeded());
+    CHECK_TRUE(!flag.consumeFlushNeeded());
+    flag.noteSkipped();
+    CHECK_TRUE(flag.consumeFlushNeeded());
+}
+
 } // namespace
 
 int main() {
+    TestCatchUpIsBoundedPerTick();
+    TestSkippedPartFlushesTheDecoderOnce();
     TestVideoTicksAtOneDisplayRefreshAtMost();
     TestAudioOnlyTicksSlowerThanVideo();
     TestTickNeverLetsTheAudioRingDrainBelowHalf();

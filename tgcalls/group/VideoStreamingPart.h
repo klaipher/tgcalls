@@ -38,6 +38,10 @@ public:
     VideoStreamingSharedStateInternal *impl() const {
         return _impl;
     }
+
+    // A part of this stream went by without being decoded (nobody showed it). The decoder is flushed
+    // before it is used again.
+    void noteSkippedPart();
     
 private:
     VideoStreamingSharedStateInternal *_impl = nullptr;

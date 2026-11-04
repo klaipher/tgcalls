@@ -57,6 +57,33 @@ inline bool shouldDecodeStreamVideo(size_t liveSinkCount) {
     return liveSinkCount > 0;
 }
 
+// Upper bound on frames decoded for one stream in one render tick. Playing at 60 fps needs one or two;
+// the rest is catch-up after a tile was hidden (its part stops where it was) and shown again.
+constexpr int kMaxStreamFramesDecodedPerTick = 6;
+
+inline bool mayDecodeAnotherStreamFrame(int decodedThisTick) {
+    return decodedThisTick < kMaxStreamFramesDecodedPerTick;
+}
+
+// Each part is decoded on its own: the decoder is flushed when a part has been read to its end, so a part
+// has to start on a keyframe. A part that is skipped (nobody watches) never reaches that flush; the flag
+// makes the decoder flush once before it is used again, so nothing from before the gap is referenced.
+class SkippedPartFlag {
+public:
+    void noteSkipped() {
+        _flushNeeded = true;
+    }
+
+    bool consumeFlushNeeded() {
+        const bool result = _flushNeeded;
+        _flushNeeded = false;
+        return result;
+    }
+
+private:
+    bool _flushNeeded = false;
+};
+
 template<typename Sink>
 size_t liveStreamSinkCount(std::map<std::string, std::vector<std::weak_ptr<Sink>>> const &sinks, std::string const &endpointId) {
     const auto it = sinks.find(endpointId);

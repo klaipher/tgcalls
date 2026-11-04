@@ -326,8 +326,14 @@ public:
                 
                 std::shared_ptr<VideoStreamingSharedState> sharedVideoState;
                 auto endpointId = videoSegment->part->getActiveEndpointId();
-                // Nobody shows this endpoint: do not decode it. Its next part starts on a keyframe.
+                // Nobody shows this endpoint: do not decode it. Each part is decoded on its own and starts on
+                // a keyframe (the decoder is flushed at the end of every part), and the decoder is flushed
+                // once more before it is used after a skipped part.
                 if (endpointId.has_value() && !shouldDecodeStreamVideo(liveStreamSinkCount(_videoSinks, endpointId.value()))) {
+                    auto skipped = _sharedVideoStateByEndpointId.find(endpointId.value());
+                    if (skipped != _sharedVideoStateByEndpointId.end()) {
+                        skipped->second->noteSkippedPart();
+                    }
                     continue;
                 }
                 if (endpointId.has_value()) {
@@ -375,6 +381,9 @@ public:
                 }
 
                 if (!shouldDecodeStreamVideo(liveStreamSinkCount(_videoSinks, "unified"))) {
+                    if (sharedVideoState) {
+                        sharedVideoState->noteSkippedPart();
+                    }
                     continue;
                 }
 

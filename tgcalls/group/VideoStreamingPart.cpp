@@ -6,6 +6,7 @@
 
 #include "AVIOContextImpl.h"
 #include "LivestreamDecodePolicy.h"
+#include "StreamRenderPolicy.h"
 #include "platform/PlatformInterface.h"
 
 #include <string>
@@ -501,6 +502,9 @@ public:
         AVRational pktTimebase,
         std::string const &endpointId
     ) {
+        if (_skippedParts.consumeFlushNeeded() && _decoderState) {
+            _decoderState->reset();
+        }
         if (_decoderState && _decoderState->supportsDecoding(codecParameters, pktTimebase)) {
             return;
         }
@@ -563,8 +567,13 @@ public:
         }
         _decoderState->reset();
     }
+
+    void noteSkippedPart() {
+        _skippedParts.noteSkipped();
+    }
     
 private:
+    SkippedPartFlag _skippedParts;
     std::unique_ptr<VideoStreamingDecoderState> _decoderState;
     LivestreamDecodeHealth _health;
 };
@@ -575,6 +584,10 @@ VideoStreamingSharedState::VideoStreamingSharedState() {
 
 VideoStreamingSharedState::~VideoStreamingSharedState() {
     delete _impl;
+}
+
+void VideoStreamingSharedState::noteSkippedPart() {
+    _impl->noteSkippedPart();
 }
 
 class VideoStreamingPartInternal {
@@ -909,6 +922,9 @@ public:
     }
 
     absl::optional<VideoStreamingPartFrame> getFrameAtRelativeTimestamp(VideoStreamingSharedState const *sharedState, double timestamp) {
+        // A tile shown again mid-part would otherwise decode everything up to "now" in this one call and
+        // stall the media thread; the rest is caught up by the next ticks.
+        int decodedThisCall = 0;
         while (true) {
             while (_availableFrames.size() >= 2) {
                 if (timestamp >= _availableFrames[1].pts) {
@@ -918,10 +934,11 @@ public:
                 }
             }
             
-            if (_availableFrames.size() < 2) {
+            if (_availableFrames.size() < 2 && (_availableFrames.empty() || mayDecodeAnotherStreamFrame(decodedThisCall))) {
                 if (!_parsedVideoParts.empty()) {
                     auto result = _parsedVideoParts[0]->getNextFrame(sharedState);
                     if (result) {
+                        decodedThisCall++;
                         _availableFrames.push_back(result.value());
                     } else {
                         _parsedVideoParts.erase(_parsedVideoParts.begin());
