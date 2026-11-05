@@ -77,7 +77,7 @@ private:
 // The failure kind for the status an encode output callback reports. kVTInvalidSessionErr (-12903) is delivered
 // there too for the frames in flight when the app goes to the background, so it is the transient kind.
 constexpr int kStatusInvalidSession = -12903;
-constexpr int kStatusEncoderMalfunction = -12911;
+constexpr int kStatusEncoderMalfunction = -12912;
 
 inline EncodeFailureKind failureKindForCallbackStatus(int status) {
     if (status == kStatusInvalidSession) {

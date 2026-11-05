@@ -90,7 +90,7 @@ void TestEncodedFrameClearsTheInvalidSessionCount() {
 // An invalid session reported by the output callback (background trip) is the transient kind, not a fatal one.
 void TestCallbackInvalidSessionIsTransient() {
     CHECK_TRUE(failureKindForCallbackStatus(-12903) == EncodeFailureKind::SessionInvalid);
-    CHECK_TRUE(failureKindForCallbackStatus(-12911) == EncodeFailureKind::Malfunction);
+    CHECK_TRUE(failureKindForCallbackStatus(-12912) == EncodeFailureKind::Malfunction);
     CHECK_TRUE(failureKindForCallbackStatus(-1) == EncodeFailureKind::AsyncEncodeError);
     LowLatencyFailureTracker tracker;
     for (int i = 0; i < 2; i++) {
