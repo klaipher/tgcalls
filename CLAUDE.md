@@ -1,10 +1,18 @@
 # CLAUDE.md
 
+
+## Change records
+
+This is a Nanogram fork. Every change updates `CHANGELOG.md` (`## Unreleased`: what changed and how, with the commit)
+and, when it adds, removes or moves a difference from upstream, `NANOGRAM-CHANGES.md` (what, why, where, whether
+upstream could take it, sync notes). The iOS and macOS app repositories pin this fork; their own `CHANGELOG.md` names
+the pin. Do not fetch upstream tags or branches here by hand. Format: `docs/fork-records.md` in klaipher/nanogram.
+
 This is a testbench repository for the tgcalls VoIP library (from Telegram). It contains the full Telegram iOS source tree as a build dependency, but the focus is on testing and debugging tgcalls.
 
 ## Build
 
-Requires Bazel 8.4.2 (download to `build-input/` if not present):
+Requires Bazel 9.3.1 (the pin in klaipher/nanogram `versions.json`) (download to `build-input/` if not present):
 
 ```bash
 # One-time setup: create build configuration stub
