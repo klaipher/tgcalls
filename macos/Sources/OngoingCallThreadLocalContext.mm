@@ -472,7 +472,7 @@ private:
         if (keepLandscape) {
             resolvedId += std::string(":landscape");
         }
-        _interface = tgcalls::VideoCaptureInterface::Create(tgcalls::StaticThreads::getThreads(), resolvedId);
+        _interface = tgcalls::VideoCaptureInterface::Create(tgcalls::StaticThreads::getThreads(), resolvedId, [deviceId hasPrefix:@"desktop_capturer_"]);
         _sinks = [[NSMutableDictionary alloc] init];
     }
     return self;
@@ -566,7 +566,7 @@ tgcalls::VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(tgcalls:
     if (_keepLandscape) {
         resolvedId += std::string(":landscape");
     }
-    _interface->switchToDevice(resolvedId, false);
+    _interface->switchToDevice(resolvedId, [deviceId hasPrefix:@"desktop_capturer_"]);
 }
 
 - (void)setIsVideoEnabled:(bool)isVideoEnabled {

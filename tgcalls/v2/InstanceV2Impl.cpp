@@ -1,6 +1,7 @@
 #include "v2/InstanceV2Impl.h"
 #include "CallAudioWebRtc.h"
 #include "CallSystemPolicy.h"
+#include "ScreenSharePolicy.h"
 
 #include "LogSinkImpl.h"
 #include "VideoCaptureInterfaceImpl.h"
@@ -2296,6 +2297,7 @@ InstanceV2Impl::InstanceV2Impl(Descriptor &&descriptor) {
     if (_logSink) {
         rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
     }
+    RTC_LOG(LS_INFO) << screenshare::callLogLine(descriptor.version);
 
     _threads = StaticThreads::getThreads();
     _internal.reset(new ThreadLocalObject<InstanceV2ImplInternal>(_threads->getMediaThread(), [descriptor = std::move(descriptor), threads = _threads]() mutable {

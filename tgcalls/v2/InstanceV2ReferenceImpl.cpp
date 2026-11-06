@@ -2,6 +2,7 @@
 #include "v2/InstanceV2ReferenceImpl.h"
 
 #include "LogSinkImpl.h"
+#include "ScreenSharePolicy.h"
 #include "VideoCaptureInterfaceImpl.h"
 #include "VideoCapturerInterface.h"
 #include "v2/NativeNetworkingImpl.h"
@@ -1676,12 +1677,18 @@ public:
 
         auto videoCaptureImpl = GetVideoCaptureAssumingSameThread(videoCapture.get());
         if (videoCaptureImpl) {
-            if (videoCaptureImpl->isScreenCapture()) {
-            } else {
+            {
+                const bool isScreenCapture = videoCaptureImpl->isScreenCapture();
                 _videoCapture = videoCapture;
 
                 auto videoTrack = _peerConnectionFactory->CreateVideoTrack(videoCaptureImpl->source(), "1");
                 if (videoTrack) {
+                    if (isScreenCapture) {
+                        // This protocol has one video channel and no screencast signalling, so the screen
+                        // travels on it with screen-content settings (sharp text, no resolution scaling).
+                        videoTrack->set_content_hint(webrtc::VideoTrackInterface::ContentHint::kDetailed);
+                        RTC_LOG(LS_INFO) << "Call: screen share sent on the video channel with screen-content settings";
+                    }
                     webrtc::RtpTransceiverInit transceiverInit;
                     transceiverInit.stream_ids = { "0" };
 
@@ -1731,7 +1738,10 @@ public:
                         if (parameters.encodings.empty()) {
                             parameters.encodings.push_back(webrtc::RtpEncodingParameters());
                         }
-                        parameters.encodings[0].max_bitrate_bps = 1200 * 1024;
+                        parameters.encodings[0].max_bitrate_bps = isScreenCapture ? screenshare::kScreenMaxBitrateBps : 1200 * 1024;
+                        if (isScreenCapture) {
+                            parameters.degradation_preference = webrtc::DegradationPreference::MAINTAIN_RESOLUTION;
+                        }
                         _outgoingVideoTransceiver->sender()->SetParameters(parameters);
 
                         _outgoingVideoTrack->set_enabled(true);
@@ -2063,6 +2073,7 @@ InstanceV2ReferenceImpl::InstanceV2ReferenceImpl(Descriptor &&descriptor) {
     if (_logSink) {
         rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
     }
+    RTC_LOG(LS_INFO) << screenshare::callLogLine(descriptor.version);
 
     _threads = StaticThreads::getThreads();
     _internal.reset(new ThreadLocalObject<InstanceV2ReferenceImplInternal>(_threads->getMediaThread(), [descriptor = std::move(descriptor), threads = _threads]() mutable {

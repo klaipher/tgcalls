@@ -36,3 +36,10 @@ First version, assembled from commit subjects and the iOS repository's `docs/sub
 ### Legacy v1 calls
 - What: arm64 uses the hardware H.264 encoder (`supportsEncoding(H264)` no longer inverted); x86_64 keeps the upstream H.264-only offer (pending the owner).
 - Where: `tgcalls/legacy`/`platform/darwin` (check).
+
+### 1:1 screen share by protocol version
+
+- `tgcalls/ScreenSharePolicy.h` (host test `tests/screen_share_policy`, Bazel `screen_share_policy_test`): version to screen mode. `macos/Sources/OngoingCallThreadLocalContext.mm` passes `isScreenCapture` for `desktop_capturer_` ids in `Create` and `switchToDevice`.
+- `InstanceV2ReferenceImpl::setVideoCapture` (10.0.0/11.0.0): a screen capture used to fall into an empty branch and nothing was sent. It now uses the single video transceiver with content hint `kDetailed` (sets `is_screencast`), `MAINTAIN_RESOLUTION` and a 2 Mbps ceiling (camera: 1200 KiB/s as before).
+- `InstanceV2Impl` (7/8/9/12/13) keeps its separate screencast channel; the peer treats any incoming video content as its incoming video, so it shows the screen. 14.0.0 (CompatImpl) still drops screen captures and 18/19 are untouched: not registered on the Mac; iOS behaves as before.
+- Each of InstanceImpl, InstanceV2Impl and InstanceV2ReferenceImpl writes `Call: negotiated version X, screen share mode Y` to the call log when created.

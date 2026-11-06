@@ -7,7 +7,7 @@ moved under their date when the app repositories pin them.
 
 ## Unreleased
 
-(none)
+- 1:1 screen share: the Mac marks `desktop_capturer_` sources as screen captures; `ScreenSharePolicy.h` maps the negotiated version to how the screen is sent (7/8/9/12/13 screencast channel, 10/11 video channel with screen-content settings, 2.7.7/5.0.0 bitrate floor); InstanceV2ReferenceImpl no longer drops a screen capture; every call logs its version and screen mode
 
 ## 2026-11-04
 

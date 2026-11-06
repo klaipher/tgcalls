@@ -1,6 +1,7 @@
 #include "InstanceImpl.h"
 
 #include "LogSinkImpl.h"
+#include "ScreenSharePolicy.h"
 #include "Manager.h"
 #include "MediaManager.h"
 #include "VideoCaptureInterfaceImpl.h"
@@ -30,6 +31,7 @@ InstanceImpl::InstanceImpl(Descriptor &&descriptor)
     configureDebugLogging(rtc::LS_INFO);
     rtc::LogMessage::SetLogToStderr(false);
 	rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
+    RTC_LOG(LS_INFO) << screenshare::callLogLine(descriptor.version);
 
     auto networkType = descriptor.initialNetworkType;
 
