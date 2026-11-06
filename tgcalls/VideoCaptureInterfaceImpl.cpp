@@ -128,10 +128,10 @@ void VideoCaptureInterfaceObject::setState(VideoState state) {
 
 // With the thermal ladder off this is the request the code always made: the given size at 25 fps.
 void VideoCaptureInterfaceObject::applyOutputFormat(int width, int height) {
-    const auto format = systempolicy::videoLadderFormat(_thermalLevel, width, height, CallsRuntimeSwitches::thermalVideoLadder() && !_isScreenCapture);
+    const auto format = systempolicy::videoLadderFormat(_thermalLevel, width, height, CallsRuntimeSwitches::thermalVideoLadder(), _isScreenCapture);
     PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, format.width, format.height, format.fps);
     if (_videoCapturer) {
-        _videoCapturer->setMaximumFrameRate(systempolicy::thermalCameraFpsCap(_thermalLevel, CallsRuntimeSwitches::thermalVideoLadder() && !_isScreenCapture));
+        _videoCapturer->setMaximumFrameRate(systempolicy::thermalCameraFpsCap(_thermalLevel, CallsRuntimeSwitches::thermalVideoLadder(), _isScreenCapture));
     }
 }
 

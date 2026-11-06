@@ -47,6 +47,30 @@ void TestOtherVersionsAreNotSupported() {
     }
 }
 
+// Pins which implementation class registers each version (the lists in getVersions of InstanceImpl,
+// InstanceV2Impl and InstanceV2ReferenceImpl) and that each implementation takes the screen path of its mode.
+void TestEachVersionTakesItsImplementationsScreenPath() {
+    struct Row { const char *version; const char *implementation; ScreenMode mode; };
+    const Row rows[] = {
+        {"2.7.7", "InstanceImpl", ScreenMode::BitrateFloorOnVideo},
+        {"5.0.0", "InstanceImpl", ScreenMode::BitrateFloorOnVideo},
+        {"7.0.0", "InstanceV2Impl", ScreenMode::SeparateScreencastChannel},
+        {"8.0.0", "InstanceV2Impl", ScreenMode::SeparateScreencastChannel},
+        {"9.0.0", "InstanceV2Impl", ScreenMode::SeparateScreencastChannel},
+        {"12.0.0", "InstanceV2Impl", ScreenMode::SeparateScreencastChannel},
+        {"13.0.0", "InstanceV2Impl", ScreenMode::SeparateScreencastChannel},
+        {"10.0.0", "InstanceV2ReferenceImpl", ScreenMode::ScreenSettingsOnVideoChannel},
+        {"11.0.0", "InstanceV2ReferenceImpl", ScreenMode::ScreenSettingsOnVideoChannel},
+        {"14.0.0", "none", ScreenMode::NotSupported},
+    };
+    for (const Row &row : rows) {
+        CHECK_TRUE(std::strcmp(implementationFor(row.version), row.implementation) == 0);
+        CHECK_TRUE(chooseScreenMode(row.version) == row.mode);
+    }
+    // The version two current clients negotiate (see the header) is the screencast-channel implementation.
+    CHECK_TRUE(std::strcmp(implementationFor("9.0.0"), "InstanceV2Impl") == 0);
+}
+
 void TestModeNamesAreDistinct() {
     const ScreenMode modes[] = {
         ScreenMode::BitrateFloorOnVideo,
@@ -70,7 +94,7 @@ void TestLogLine() {
 }
 
 void TestScreenBitrateCeilingIsAboveTheCameraCeiling() {
-    CHECK_TRUE(kScreenMaxBitrateBps > 1200 * 1024);
+    CHECK_TRUE(kScreenMaxBitrateBps > 1200 * 1024 /* the camera cap: 1200 Kibit/s */);
 }
 
 } // namespace
@@ -81,6 +105,7 @@ int main() {
     TestReferenceVersionsCarryTheScreenOnTheVideoChannel();
     TestEveryVersionTheMacRegistersSendsTheScreen();
     TestOtherVersionsAreNotSupported();
+    TestEachVersionTakesItsImplementationsScreenPath();
     TestModeNamesAreDistinct();
     TestLogLine();
     TestScreenBitrateCeilingIsAboveTheCameraCeiling();

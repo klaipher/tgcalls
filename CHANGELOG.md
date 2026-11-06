@@ -7,7 +7,7 @@ moved under their date when the app repositories pin them.
 
 ## Unreleased
 
-- 1:1 screen share: the Mac marks `desktop_capturer_` sources as screen captures; `ScreenSharePolicy.h` maps the negotiated version to how the screen is sent (7/8/9/12/13 screencast channel, 10/11 video channel with screen-content settings, 2.7.7/5.0.0 bitrate floor); InstanceV2ReferenceImpl no longer drops a screen capture; every call logs its version and screen mode
+- 1:1 screen share (3862bdc, corrected in the fix-pass commit): calls negotiate 9.0.0 (the app reverses the version list), so the visible change is InstanceV2Impl's separate screencast channel for Mac screen shares; the 10/11 PeerConnection path is a rare fallback. The Mac marks `desktop_capturer_` sources as screen captures; `ScreenSharePolicy.h` maps the negotiated version to how the screen is sent (7/8/9/12/13 screencast channel, 10/11 video channel with screen-content settings, 2.7.7/5.0.0 bitrate floor); InstanceV2ReferenceImpl no longer drops a screen capture; every call logs its version and screen mode (expected on a normal call: `negotiated version 9.0.0, screen share mode separate-screencast-channel`). Thermal video ladder (when on): a screen share keeps its size and drops frame rate only (15 fps from level 2, 10 at level 3); before, `isScreenCapture` switched the ladder off entirely, now that the Mac sets the flag it would have disabled protection for Mac screen shares
 
 ## 2026-11-04
 

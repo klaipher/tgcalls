@@ -70,6 +70,22 @@ int main() {
         CHECK(thermalCameraFpsCap(level, false) == 0);
     }
 
+    // A screen share keeps its size at every level (legible text) and loses only frame rate: 15 fps from level 2, 10 at level 3.
+    for (int level = 0; level <= 1; level++) {
+        CHECK((videoLadderFormat(level, 2560, 1440, true, true) == OutgoingVideoSize{2560, 1440, 25}));
+        CHECK(thermalCameraFpsCap(level, true, true) == 0);
+    }
+    CHECK((videoLadderFormat(2, 2560, 1440, true, true) == OutgoingVideoSize{2560, 1440, 15}));
+    CHECK((videoLadderFormat(3, 2560, 1440, true, true) == OutgoingVideoSize{2560, 1440, 10}));
+    CHECK((videoLadderFormat(3, 1440, 2560, true, true) == OutgoingVideoSize{1440, 2560, 10}));
+    CHECK(thermalCameraFpsCap(2, true, true) == 15 && thermalCameraFpsCap(3, true, true) == 10);
+    for (int level = -4; level <= 99; level++) {
+        CHECK((videoLadderFormat(level, 2560, 1440, false, true) == OutgoingVideoSize{2560, 1440, 25}));
+        CHECK(thermalCameraFpsCap(level, false, true) == 0);
+        CHECK(videoLadderFormat(level, 2560, 1440, true, true).width == 2560);
+    }
+    CHECK(videoLadderFormat(3, 2560, 1440, true, true).fps < videoLadderFormat(3, 2560, 1440, true, false).fps);
+
     // Remote video is dropped locally only when nobody can see it.
     CHECK(shouldDropRemoteVideo(true, false));
     CHECK(!shouldDropRemoteVideo(false, false));

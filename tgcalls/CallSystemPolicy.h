@@ -70,14 +70,25 @@ inline OutgoingVideoSize limitOutgoingVideo(int width, int height, int fps, int 
 // Thermal video ladder. The app maps the system thermal state, Low Power Mode and the camera's system pressure to a
 // level: 0 nominal, 1 elevated (UI only, no video change), 2 high, 3 critical. With CallsRuntimeSwitches::thermalVideoLadder
 // on, the ladder lowers the size and frame rate the encoder is fed. The size is a cap on the SHORT side, so it works for
-// portrait and landscape capture alike. Screen sharing is never limited. The app holds a level for 30 s after it
+// portrait and landscape capture alike. A screen share keeps its size (text must stay legible) and only loses frame
+// rate: 15 fps from level 2, 10 fps at level 3 (see videoLadderStep with isScreen). The app holds a level for 30 s after it
 // improves (each resolution change reconfigures the encoder); UI-only effects release after 5 s.
 struct VideoLadderStep {
     int maxShortSide = 0;
     int maxFps = 0;
 };
 
-inline VideoLadderStep videoLadderStep(int level) {
+inline VideoLadderStep videoLadderStep(int level, bool isScreen = false) {
+    if (isScreen) {
+        switch (level) {
+            case 2:
+                return { 0, 15 };
+            case 3:
+                return { 0, 10 };
+            default:
+                return { 0, 0 };
+        }
+    }
     switch (level) {
         case 2:
             return { 540, 20 };
@@ -88,22 +99,22 @@ inline VideoLadderStep videoLadderStep(int level) {
     }
 }
 
-inline OutgoingVideoSize videoLadderFormat(int level, int width, int height, bool enabled) {
+inline OutgoingVideoSize videoLadderFormat(int level, int width, int height, bool enabled, bool isScreen = false) {
     if (!enabled) {
         return limitOutgoingVideo(width, height, kOutgoingCameraFps, 0, 0);
     }
-    const auto step = videoLadderStep(std::max(0, std::min(3, level)));
+    const auto step = videoLadderStep(std::max(0, std::min(3, level)), isScreen);
     return limitOutgoingVideo(width, height, kOutgoingCameraFps, step.maxShortSide, step.maxFps);
 }
 
 // The frame rate the camera itself should run at for a thermal level; 0 means no cap (the rate the capture started
 // with). Lowering the rate at the source saves the camera and its image processing, not just the encode, and avoids the
 // uneven frame drops of an adapter working from a faster source.
-inline int thermalCameraFpsCap(int level, bool enabled) {
+inline int thermalCameraFpsCap(int level, bool enabled, bool isScreen = false) {
     if (!enabled || level < 2) {
         return 0;
     }
-    return videoLadderStep(std::min(3, level)).maxFps;
+    return videoLadderStep(std::min(3, level), isScreen).maxFps;
 }
 
 // Remote video is dropped locally (never signalled to the peer) while the app is in the background and Picture in
