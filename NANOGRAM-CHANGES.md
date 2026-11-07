@@ -46,3 +46,10 @@ First version, assembled from commit subjects and the iOS repository's `docs/sub
 - `InstanceV2ReferenceImpl::setVideoCapture` (10.0.0/11.0.0): a screen capture used to fall into an empty branch and nothing was sent. It now uses the single video transceiver with content hint `kDetailed` (sets `is_screencast`), `MAINTAIN_RESOLUTION` and a 2 Mbps ceiling (camera: 1200 Kibit/s, `1200 * 1024` bps, as before).
 - `InstanceV2Impl` (7/8/9/12/13) keeps its separate screencast channel; the peer treats any incoming video content as its incoming video, so it shows the screen. 14.0.0 (CompatImpl) still drops screen captures and 18/19 are untouched: not registered on the Mac; iOS behaves as before.
 - Each of InstanceImpl, InstanceV2Impl and InstanceV2ReferenceImpl writes `Call: negotiated version X, screen share mode Y` to the call log when created.
+
+### Sync with Telegram 13.2 (tgcalls c1de0882)
+- What: Telegram's 13.2 engine changes, taken without their unpublished base: SCTP timer overrides read and range-checked by every SCTP-signaling engine; reflector candidate-IP resolution on by default; `removeOutgoingChannel` index fix; CompatImpl (14.0.0) honours `network_signaling_nosctp` and mutes through the sender's `encodings[0].active`.
+- Why: calls with Android 14.0.0 (always nosctp) and with relays; no behaviour beyond what Telegram shipped.
+- Where: `tgcalls/v2/SignalingSctpConnection.*`, `CustomParameters.h`, `ContentNegotiation.cpp`, `InstanceV2CompatImpl.cpp`, `InstanceV2Impl.cpp`, `InstanceV2ReferenceImpl.cpp`, `NativeNetworkingImpl.cpp`, `v2wasm/CallCoreHost.cpp`; host tests `v2/SignalingSctpOptionsTest.cpp`, `v2/ContentNegotiationTest.cpp` (superproject targets `signaling_sctp_options_test`, `content_negotiation_test`).
+- Upstream: yes for the picked commits (they are Telegram's); the CompatImpl part is our re-implementation of c839645, not public.
+- Sync: when Telegram publishes c839645 or the 13.2 development tree, diff `InstanceV2CompatImpl.cpp` against it and drop ours; the two test mains must stay excluded in `Package.swift`.

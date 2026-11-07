@@ -7,6 +7,15 @@ moved under their date when the app repositories pin them.
 
 ## Unreleased
 
+Sync with Telegram 13.2 (tgcalls c1de0882 on development, not public). Source of each change: the public `dev/android` cherry-picks of Telegram's own commits where they exist (`git cherry-pick -x`), a re-implementation where not.
+
+- Every SCTP-signaling engine (11.0.0, 14.0.0, 18/19, as 12/13 before) reads `network_sctp_t1_init_ms` / `_t1_cookie_ms` / `_max_backoff_ms` through `SignalingSctpConnection::Options::fromCustomParameters`; each connection logs its values (af52b5d, picked from dev/android 12ab3b3 = development 8d5e7e0)
+- The SCTP timer values are range-checked (1-60000 ms, numbers beyond int read as absent), `SignalingSctpConnection` takes `Options` with no default, host test `SignalingSctpOptionsTest.cpp` (1d574df, dev/android d96660e = development c5ef736)
+- `network_reflector_resolve_remote_candidate_ip` defaults to on in every engine that reads it (`getCustomParameterBoolDefaultTrue`); only an explicit `false` turns it off (59a614e, dev/android 545f5ae = development c1de0882)
+- ContentNegotiation: `removeOutgoingChannel` walks `_outgoingChannelDescriptions`; a camera turned off before the peer answered no longer returns as a second video channel; host test `ContentNegotiationTest.cpp` from the public look-alike tmacos 10dc9ae (1e99bc9; Telegram's 44e528e)
+- InstanceV2CompatImpl (14.0.0): `network_signaling_nosctp` selects `ExternalSignalingConnection`; mute sets the audio sender's `encodings[0].active` and re-applies it after every negotiation step (51dbd05; Telegram's c839645, re-implemented)
+- Not taken: 11.0.0 `OnRenegotiationNeeded` routed through `requestRenegotiation` (03cd2c5, measured neutral); CompatImpl 7.0.0/8.0.0/9.0.0 framing (unreachable: the app registers InstanceV2Impl first for those versions); `Package.swift` "native SwiftPM WebRTC" (d69ed2f; different Mac integration)
+
 - 1:1 screen share (3862bdc, corrected in the fix-pass commit): calls negotiate 9.0.0 (the app reverses the version list), so the visible change is InstanceV2Impl's separate screencast channel for Mac screen shares; the 10/11 PeerConnection path is a rare fallback. The Mac marks `desktop_capturer_` sources as screen captures; `ScreenSharePolicy.h` maps the negotiated version to how the screen is sent (7/8/9/12/13 screencast channel, 10/11 video channel with screen-content settings, 2.7.7/5.0.0 bitrate floor); InstanceV2ReferenceImpl no longer drops a screen capture; every call logs its version and screen mode (expected on a normal call: `negotiated version 9.0.0, screen share mode separate-screencast-channel`). Thermal video ladder (when on): a screen share keeps its size and drops frame rate only (15 fps from level 2, 10 at level 3); before, `isScreenCapture` switched the ladder off entirely, now that the Mac sets the flag it would have disabled protection for Mac screen shares
 
 ## 2026-11-04
