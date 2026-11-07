@@ -29,6 +29,7 @@ let package = Package(
                       "tgcalls/v2/InstanceV2CompatImpl.cpp",
                       "tgcalls/group/GroupInstanceReferenceImpl.cpp",
                       "tgcalls/v2/SignalingSctpOptionsTest.cpp",
+                      "tgcalls/v2/ContentNegotiationTest.cpp",
                       "README.md",
                       "tests",
                       "tgcalls/platform/android",
