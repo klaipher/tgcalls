@@ -394,25 +394,46 @@ public:
 
         RTC_DCHECK(_threads->getMediaThread()->IsCurrent());
 
-        // Always use SCTP signaling connection (V3 protocol)
-        _signalingConnection = std::make_unique<SignalingSctpConnection>(
-            _threads,
-            [threads = _threads, weak](const std::vector<uint8_t> &data) {
-                threads->getMediaThread()->PostTask([weak, data] {
-                    const auto strong = weak.lock();
-                    if (!strong) {
-                        return;
-                    }
+        // SCTP signaling (V3 protocol), or the bare external connection under
+        // network_signaling_nosctp, as InstanceV2Impl does for 12.0.0/13.0.0. The
+        // framing (gzip + encryptRawPacket) is the same either way; only the
+        // transport differs, and a peer under the flag cannot parse SCTP INITs.
+        if (!getCustomParameterBool(_customParameters, "network_signaling_nosctp")) {
+            _signalingConnection = std::make_unique<SignalingSctpConnection>(
+                _threads,
+                [threads = _threads, weak](const std::vector<uint8_t> &data) {
+                    threads->getMediaThread()->PostTask([weak, data] {
+                        const auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
 
-                    strong->onSignalingData(data);
-                });
-            },
-            [signalingDataEmitted = _signalingDataEmitted](const std::vector<uint8_t> &data) {
-                signalingDataEmitted(data);
-            },
-            _encryptionKey.isOutgoing,
-            SignalingSctpConnection::Options::fromCustomParameters(_customParameters)
-        );
+                        strong->onSignalingData(data);
+                    });
+                },
+                [signalingDataEmitted = _signalingDataEmitted](const std::vector<uint8_t> &data) {
+                    signalingDataEmitted(data);
+                },
+                _encryptionKey.isOutgoing,
+                SignalingSctpConnection::Options::fromCustomParameters(_customParameters)
+            );
+        } else {
+            _signalingConnection = std::make_unique<ExternalSignalingConnection>(
+                [threads = _threads, weak](const std::vector<uint8_t> &data) {
+                    threads->getMediaThread()->PostTask([weak, data] {
+                        const auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
+
+                        strong->onSignalingData(data);
+                    });
+                },
+                [signalingDataEmitted = _signalingDataEmitted](const std::vector<uint8_t> &data) {
+                    signalingDataEmitted(data);
+                }
+            );
+        }
 
         _signalingConnection->start();
 
@@ -743,7 +764,7 @@ public:
                 parameters.encodings[0].max_bitrate_bps = 32 * 1024;
                 _outgoingAudioTransceiver->sender()->SetParameters(parameters);
 
-                _outgoingAudioTrack->set_enabled(true);
+                applyOutgoingAudioMuteState();
             }
         }
 
@@ -1080,6 +1101,7 @@ public:
     // After every SetLocalDescription/SetRemoteDescription: remote messages first,
     // then any offer of our own.
     void onNegotiationStepCompleted() {
+        applyOutgoingAudioMuteState();
         processPendingRemoteNegotiation();
         flushPendingRenegotiation();
     }
@@ -1696,13 +1718,35 @@ public:
     void setNetworkType(NetworkType networkType) {
     }
 
+    // A disabled track only zeroes the samples; the audio send stream keeps
+    // encoding and sending. What starts and stops it is the sender's
+    // encodings[0].active, applied without a renegotiation. It is re-applied
+    // after every negotiation step because a rolled-back or re-created
+    // description can bring the sender's parameters back to the default.
+    // Runs on the media thread, the PeerConnection's signaling thread.
+    void applyOutgoingAudioMuteState() {
+        const bool sending = !_isMicrophoneMuted;
+        if (_outgoingAudioTrack) {
+            _outgoingAudioTrack->set_enabled(sending);
+        }
+        if (_outgoingAudioTransceiver) {
+            auto sender = _outgoingAudioTransceiver->sender();
+            webrtc::RtpParameters parameters = sender->GetParameters();
+            if (!parameters.encodings.empty() && parameters.encodings[0].active != sending) {
+                parameters.encodings[0].active = sending;
+                webrtc::RTCError error = sender->SetParameters(parameters);
+                if (!error.ok()) {
+                    RTC_LOG(LS_WARNING) << "CompatImpl: failed to set outgoing audio active=" << sending << ": " << error.message();
+                }
+            }
+        }
+    }
+
     void setMuteMicrophone(bool muteMicrophone) {
         if (_isMicrophoneMuted != muteMicrophone) {
             _isMicrophoneMuted = muteMicrophone;
 
-            if (_outgoingAudioTrack) {
-                _outgoingAudioTrack->set_enabled(!_isMicrophoneMuted);
-            }
+            applyOutgoingAudioMuteState();
 
             sendMediaState();
         }
