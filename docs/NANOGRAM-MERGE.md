@@ -23,17 +23,25 @@ the shared line (`origin/nanogram-shared`, 9bfb76f); merge base 1c236c0. Rule: s
 | `PlatformInterface::makeVideoSource` | Three arguments `(signalingThread, workerThread, bool screencapture)` everywhere: `PlatformInterface.h`, Darwin, Desktop (tdesktop), Fake, Android; `VideoCaptureInterfaceObject` passes `isScreenCapture`. The iOS/Mac bridge does not override it. |
 | `Descriptor::audioLevelUpdated(float)` (iOS, Mac) vs `audioLevelsUpdated(float, float)` (Android) | Descriptor keeps both. `MakeAudioLevelsCallback` (Instance.h) merges them into the engines' `(own, effective)` form; `Manager`, `InstanceV2Impl`, `InstanceV2CompatImpl` and `InstanceV2ReferenceImpl` use it. If both are set both are called. The 1:1 AudioSinkImpl now reports `(0, level)`. |
 | `EncryptionKey::value` | Stays `shared_ptr<const array>`; Android's JNI passes a non-const `shared_ptr`, which converts implicitly. |
-| `_currentUncroppedSink` | Stays `weak_ptr` with `.lock()` in `switchToDevice` (shared); Android's version had the lock commented out and a `shared_ptr` member. |
+| `_currentUncroppedSink` | `std::shared_ptr` member and unconditional `setUncroppedOutput(_currentUncroppedSink)` under `WEBRTC_ANDROID` (the JNI layer passes a temporary sink and the capturer holds the only other reference, so a `weak_ptr` would expire in `switchToDevice` and the self-view would freeze after a camera flip); shared's `weak_ptr` + `.lock()` everywhere else. |
 | `std::weak_ptr{ _videoCaptureGuard }` | Explicit `std::weak_ptr<bool>{ ... }` (Android's form, valid in C++17 and C++20). |
 
 ## Android changes carried unchanged (they merged without conflict)
 
 `tgcalls/platform/android/**` is byte-identical to `origin/nanogram-android`. In shared files Android adds:
-`VideoSinkImpl` keeps only the last frame size (no stored `VideoFrame`, no replay of the last frame to a new sink),
-empty or incomplete `ssrcGroups` of a video description are ignored, `InstanceV2Impl` resets outgoing video and
-screencast channels when capture changes, and `requestRenegotiation()` also handles WebRTC's own `OnRenegotiationNeeded`.
-iOS and macOS get these too; the replay change is the one most worth watching on the Apple bridges (a sink added late shows
-nothing until the next frame).
+three behaviours live in shared files, all now under `#ifdef WEBRTC_ANDROID` so iOS and macOS keep shared behaviour:
+`VideoSinkImpl` keeps only the last frame size (no stored `VideoFrame`, no replay of the last frame to a sink added late;
+Apple keeps the replay), empty or incomplete `ssrcGroups` of a video description are ignored, and `InstanceV2Impl`
+resets the outgoing video and screencast channels when capture changes or video turns off (Apple only detaches the
+capture). Promoting the `ssrcGroups` guard or the channel reset to all platforms needs an owner decision and an Apple
+runtime check of camera/screen-share switching. `requestRenegotiation()` also handles WebRTC's own
+`OnRenegotiationNeeded` on every platform.
+
+Proof: with every `WEBRTC_ANDROID` block removed, `InstanceV2Impl.cpp`, `GroupInstanceCustomImpl.cpp` and
+`VideoCaptureInterfaceImpl.{h,cpp}` differ from 9bfb76f only by the signature, audio-level, `makeVideoSource` and
+renegotiation hunks.
+
+W4.4 emulator plan: add an Android camera flip check (front/back, then confirm the local self-view keeps updating).
 
 ## Platform call sites read (no changes needed beyond the above)
 
