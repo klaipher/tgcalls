@@ -72,6 +72,9 @@ public:
     }
     
     int decode(AVPacket &packet, AVFrame *frame) {
+        if (!_codecContext) {
+            return -1;
+        }
         int ret = avcodec_send_packet(_codecContext, &packet);
         if (ret < 0) {
             return ret;
