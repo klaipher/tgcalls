@@ -17,7 +17,7 @@ class FakeInterface : public PlatformInterface {
   std::unique_ptr<webrtc::VideoDecoderFactory> makeVideoDecoderFactory() override;
   bool supportsEncoding(const std::string &codecName) override;
   webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> makeVideoSource(rtc::Thread *signalingThread,
-                                                                        rtc::Thread *workerThread) override;
+                                                                        rtc::Thread *workerThread, bool screencapture) override;
   void adaptVideoSource(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> videoSource, int width, int height,
                         int fps) override;
   std::unique_ptr<VideoCapturerInterface> makeVideoCapturer(

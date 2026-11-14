@@ -53,3 +53,10 @@ First version, assembled from commit subjects and the iOS repository's `docs/sub
 - Where: `tgcalls/v2/SignalingSctpConnection.*`, `CustomParameters.h`, `ContentNegotiation.cpp`, `InstanceV2CompatImpl.cpp`, `InstanceV2Impl.cpp`, `InstanceV2ReferenceImpl.cpp`, `NativeNetworkingImpl.cpp`, `v2wasm/CallCoreHost.cpp`; host tests `v2/SignalingSctpOptionsTest.cpp`, `v2/ContentNegotiationTest.cpp` (superproject targets `signaling_sctp_options_test`, `content_negotiation_test`).
 - Upstream: yes for the picked commits (they are Telegram's); the CompatImpl part is our re-implementation of c839645, not public.
 - Sync: when Telegram publishes c839645 or the 13.2 development tree, diff `InstanceV2CompatImpl.cpp` against it and drop ours; the two test mains must stay excluded in `Package.swift`.
+
+### One engine for Android too
+- What: the Android line is merged in. `makeVideoSource(thread, thread, screencapture)`; `Descriptor` carries both the single and the two-level audio-level callbacks; WebRTC's `OnRenegotiationNeeded` waits for a quiet stable state like capture changes; the Android platform layer (`tgcalls/platform/android/`) lives here unchanged; the video sink no longer replays its last frame to a late sink; video descriptions with empty `ssrcGroups` are ignored.
+- Where: `tgcalls/Instance.h`, `Manager.cpp`, `MediaManager.*`, `platform/*/`, `v2/InstanceV2*Impl.cpp`, `group/GroupInstanceCustomImpl.cpp`.
+- Why: one source for the three apps, so a call fix lands once.
+- Upstream: no.
+- Sync: per-file resolutions in docs/NANOGRAM-MERGE.md. Android CMake stays `-std=c++17`.

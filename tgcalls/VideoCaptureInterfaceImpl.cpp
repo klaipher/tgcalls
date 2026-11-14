@@ -29,7 +29,7 @@ std::vector<VideoCaptureInterfaceImpl *> &captureRegistry() {
 }
 
 VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::string deviceId, bool isScreenCapture, std::shared_ptr<PlatformContext> platformContext, Threads &threads)
-: _videoSource(PlatformInterface::SharedInstance()->makeVideoSource(threads.getMediaThread(), threads.getWorkerThread())) {
+: _videoSource(PlatformInterface::SharedInstance()->makeVideoSource(threads.getMediaThread(), threads.getWorkerThread(), isScreenCapture)) {
 	_platformContext = platformContext;
     _thermalLevel = CallsRuntimeSwitches::thermalLevel();
 

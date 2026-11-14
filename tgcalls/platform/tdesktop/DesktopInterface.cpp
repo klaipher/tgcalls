@@ -29,7 +29,7 @@ std::unique_ptr<webrtc::VideoDecoderFactory> DesktopInterface::makeVideoDecoderF
 #endif
 }
 
-rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> DesktopInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {
+rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> DesktopInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread, bool screencapture) {
 	const auto videoTrackSource = rtc::scoped_refptr<VideoCapturerTrackSource>(
 		new rtc::RefCountedObject<VideoCapturerTrackSource>());
 	return videoTrackSource

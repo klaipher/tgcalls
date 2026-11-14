@@ -232,7 +232,11 @@ struct Descriptor {
 	std::shared_ptr<VideoCaptureInterface> videoCapture;
 	std::function<void(State)> stateUpdated;
 	std::function<void(int)> signalBarsUpdated;
+    // Single-level form (effective level), used by the iOS and macOS bridges.
     std::function<void(float)> audioLevelUpdated;
+    // Two-level form (own level, effective level), used by the Android bridge.
+    // Set either one or both; both are called when both are set.
+    std::function<void(float, float)> audioLevelsUpdated;
     std::function<void(bool)> remoteBatteryLevelIsLowUpdated;
 	std::function<void(AudioState, VideoState)> remoteMediaStateUpdated;
     std::function<void(float)> remotePrefferedAspectRatioUpdated;
@@ -243,6 +247,26 @@ struct Descriptor {
     std::string initialOutputDeviceId;
     std::shared_ptr<DirectConnectionChannel> directConnectionChannel;
 };
+
+// Merges the two audio-level callbacks of a Descriptor into the (own, effective)
+// form the call engines use. Returns an empty function when neither is set, so
+// callers can keep skipping the levels timer.
+inline std::function<void(float, float)> MakeAudioLevelsCallback(
+		std::function<void(float)> single,
+		std::function<void(float, float)> pair) {
+	if (!single) {
+		return pair;
+	}
+	if (!pair) {
+		return [single = std::move(single)](float, float effectiveLevel) {
+			single(effectiveLevel);
+		};
+	}
+	return [single = std::move(single), pair = std::move(pair)](float ownLevel, float effectiveLevel) {
+		single(effectiveLevel);
+		pair(ownLevel, effectiveLevel);
+	};
+}
 
 class Meta {
 public:

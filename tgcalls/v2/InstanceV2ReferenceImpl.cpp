@@ -394,7 +394,7 @@ public:
     _encryptionKey(std::move(descriptor.encryptionKey)),
     _stateUpdated(descriptor.stateUpdated),
     _signalBarsUpdated(descriptor.signalBarsUpdated),
-    _audioLevelUpdated(descriptor.audioLevelUpdated),
+    _audioLevelsUpdated(MakeAudioLevelsCallback(descriptor.audioLevelUpdated, descriptor.audioLevelsUpdated)),
     _remoteBatteryLevelIsLowUpdated(descriptor.remoteBatteryLevelIsLowUpdated),
     _remoteMediaStateUpdated(descriptor.remoteMediaStateUpdated),
     _remotePrefferedAspectRatioUpdated(descriptor.remotePrefferedAspectRatioUpdated),
@@ -572,7 +572,7 @@ public:
 
                 if (strong->_didBeginNegotiation) {
                     if (strong->_encryptionKey.isOutgoing || strong->_peerConnection->remote_description()) {
-                        strong->sendLocalDescription();
+                        strong->requestRenegotiation();
                     }
                 } else {
                     RTC_LOG(LS_INFO) << "onRenegotiationNeeded: not sending local description";
@@ -1216,8 +1216,10 @@ public:
     }
 
     void requestRenegotiation() {
-        // A capture change wants a new offer, but only from a quiet stable
-        // state: never while our own offer is in flight, never while we owe or
+        // A capture change, or WebRTC's own OnRenegotiationNeeded (an ICE
+        // restart, say; it was raised in stable but runs a task later, when an
+        // exchange may be under way), wants a new offer, but only from a quiet
+        // stable state: never while our own offer is in flight, never while we owe or
         // await an answer, and on the callee never before the caller's first
         // offer has arrived - an unsolicited callee offer collides with it and
         // rolls it back, and a rollback of the very first offer orphans the
@@ -1985,7 +1987,7 @@ private:
     EncryptionKey _encryptionKey;
     std::function<void(State)> _stateUpdated;
     std::function<void(int)> _signalBarsUpdated;
-    std::function<void(float)> _audioLevelUpdated;
+    std::function<void(float, float)> _audioLevelsUpdated;
     std::function<void(bool)> _remoteBatteryLevelIsLowUpdated;
     std::function<void(AudioState, VideoState)> _remoteMediaStateUpdated;
     std::function<void(float)> _remotePrefferedAspectRatioUpdated;
@@ -2011,8 +2013,9 @@ private:
     bool _didBeginNegotiation = false;
     bool _isMakingOffer = false;
     bool _isSettingRemoteAnswerPending = false;
-    // setVideoCapture() asked for a new offer while one was in flight, an
-    // answer was pending, or (callee) the first remote offer had not arrived.
+    // setVideoCapture() or OnRenegotiationNeeded asked for a new offer while one
+    // was in flight, an answer was pending, or (callee) the first remote offer
+    // had not arrived.
     bool _pendingRenegotiation = false;
     bool _isPerformingConfiguration = false;
     bool _useAddTrack = false;

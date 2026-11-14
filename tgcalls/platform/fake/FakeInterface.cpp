@@ -145,7 +145,7 @@ std::unique_ptr<webrtc::VideoDecoderFactory> FakeInterface::makeVideoDecoderFact
 }
 
 webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> FakeInterface::makeVideoSource(rtc::Thread *signalingThread,
-                                                                                     rtc::Thread *workerThread) {
+                                                                                     rtc::Thread *workerThread, bool screencapture) {
   return FakePlatformVideoSource::Create();
 }
 
