@@ -7,6 +7,7 @@ moved under their date when the app repositories pin them.
 
 ## Unreleased
 
+- `Package.swift` (macOS SwiftPM target, root path `.`) excludes `ios/`: the iOS bridge added in the next entry down would otherwise be compiled into the Mac target (UIKit sources, duplicate `OngoingCallThreadLocalContext`). Mac-only manifest; no source change.
 - Merge of Android's `nanogram-android` (545f5ae) into this branch: one call engine for iOS, macOS and Android. `makeVideoSource` takes `bool screencapture` on every platform; `Descriptor` has both `audioLevelUpdated(float)` and `audioLevelsUpdated(float, float)` (`MakeAudioLevelsCallback`); `OnRenegotiationNeeded` goes through `requestRenegotiation()` (Android 03d7b86, ea0f24e); the Android platform layer is carried unchanged. Details and per-file resolutions: docs/NANOGRAM-MERGE.md
 - Android's behaviour changes in shared files are guarded with `WEBRTC_ANDROID` so iOS/macOS are unchanged: no last-frame replay in `VideoSinkImpl`, empty `ssrcGroups` ignored, `InstanceV2Impl` resets outgoing video/screencast channels on capture change or video off, `_currentUncroppedSink` is a `shared_ptr` (a `weak_ptr` expired on camera flip)
 - `tools/build_wasm_core.sh` (reference core wasm with the iOS genrule flags, then embedded source) and `tools/check_android_cmake.sh` (tgcalls sources missing from Android's CMake; today only the three host tests)

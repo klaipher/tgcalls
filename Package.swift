@@ -22,6 +22,7 @@ let package = Package(
                       "CLAUDE.md",
                       "Dockerfile",
                       "docs",
+                      "ios",
                       "tools",
                       "tgcalls/v2wasm",
                       "tgcalls/v2/MtProtoDtlsTransportTest.cpp",

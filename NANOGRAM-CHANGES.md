@@ -66,3 +66,4 @@ First version, assembled from commit subjects and the iOS repository's `docs/sub
 - Why: one source for the three apps, so a call fix lands once.
 - Upstream: no.
 - Sync: per-file resolutions in docs/NANOGRAM-MERGE.md. Android CMake stays `-std=c++17`.
+- Package manifest: the macOS `Package.swift` excludes `ios/` (the iOS bridge lives in the same tree; Bazel builds it, SwiftPM must not).
