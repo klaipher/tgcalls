@@ -17,6 +17,12 @@ First version, assembled from commit subjects and the iOS repository's `docs/sub
 - Upstream: no (Apple-only code), though the policies below are generic.
 - Sync: host tests in `tests/` and the Bazel policy tests (`TgVoipWebrtc/BUILD` in klaipher/nanogram); `Package.swift` must keep tools, docs and the wasm core out of the target.
 
+### iOS bridge
+- What: the Objective-C++ bridge for iOS (`OngoingCallThreadLocalContext`, `MediaStreaming`, `MediaUtils.h`, public headers, `TestNegotiation.mm`).
+- Where: `ios/` (module name stays TgVoipWebrtc). Separate from `macos/`; merging into `apple/` needs the owner's go.
+- Upstream: no.
+- Sync: iOS BUILD points at `tgcalls/ios/`; content was moved byte-identical.
+
 ### Call policies and runtime switches
 - What: `CallsRuntimeSwitches` (one switch class), `CallPowerPolicy`, `CallSystemPolicy`, `AudioCallPolicy`: quieter timers,
   deadline-based livestream render loop, hidden-livestream decode suspend, local outgoing camera cap, group noise mode,
