@@ -38,7 +38,13 @@ private:
     void updateAspectRateAdaptation();
 
     webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _videoSource;
+#ifdef WEBRTC_ANDROID
+	// Android: the JNI layer passes a temporary sink and the capturer holds the only other
+	// reference; switchToDevice drops it before re-attaching, so a weak_ptr would expire.
+	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentUncroppedSink;
+#else
 	std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentUncroppedSink;
+#endif
 	std::shared_ptr<PlatformContext> _platformContext;
     std::pair<int, int> _videoCapturerResolution;
 	std::unique_ptr<VideoCapturerInterface> _videoCapturer;

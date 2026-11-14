@@ -96,9 +96,13 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId, bool isSc
 		if (_preferredAspectRatio > 0) {
 			_videoCapturer->setPreferredCaptureAspectRatio(_preferredAspectRatio);
 		}
+#ifdef WEBRTC_ANDROID
+		_videoCapturer->setUncroppedOutput(_currentUncroppedSink);
+#else
 		if (const auto currentUncroppedSink = _currentUncroppedSink.lock()) {
 			_videoCapturer->setUncroppedOutput(currentUncroppedSink);
 		}
+#endif
         if (_onFatalError) {
             _videoCapturer->setOnFatalError(_onFatalError);
         }
