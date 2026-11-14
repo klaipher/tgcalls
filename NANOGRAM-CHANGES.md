@@ -67,3 +67,10 @@ First version, assembled from commit subjects and the iOS repository's `docs/sub
 - Upstream: no.
 - Sync: per-file resolutions in docs/NANOGRAM-MERGE.md. Android CMake stays `-std=c++17`.
 - Package manifest: the macOS `Package.swift` excludes `ios/` (the iOS bridge lives in the same tree; Bazel builds it, SwiftPM must not).
+
+### Livestream decoder null guard
+- What: `AudioStreamingPartPersistentDecoder` checks that the audio codec context exists before sending a packet; a livestream whose codec fails to open no longer crashes in `avcodec_send_packet`.
+- Why: crash fix shared by iOS, macOS and Android.
+- Where: `tgcalls/group/AudioStreamingPartPersistentDecoder.cpp` (commit 4f251c4).
+- Upstream: no. Source: Mercurygram ea4c440b6 (GPL-2.0), same fix reimplemented, not copied; attribution kept here and in the commit message.
+- Sync: drop ours if Telegram ships the same guard.
