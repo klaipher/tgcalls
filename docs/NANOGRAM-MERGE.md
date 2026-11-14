@@ -45,7 +45,7 @@ W4.4 emulator plan: add an Android camera flip check (front/back, then confirm t
 
 ## Platform call sites read (no changes needed beyond the above)
 
-- iOS bridge `submodules/TgVoipWebrtc/Sources/OngoingCallThreadLocalContext.mm`: sets `.audioLevelUpdated`, constructs `EncryptionKey` from a const array; compiles against the kept fields.
+- iOS bridge `ios/Sources/OngoingCallThreadLocalContext.mm`: sets `.audioLevelUpdated`, constructs `EncryptionKey` from a const array; compiles against the kept fields.
 - Mac `macos/Sources/OngoingCallThreadLocalContext.mm`: same.
 - Android `TMessagesProj/jni/voip/org_telegram_messenger_voip_Instance.cpp`: sets `.audioLevelsUpdated(float, float)` and a non-const key; both still accepted.
 
@@ -58,5 +58,5 @@ compiled here: whoever builds Android must confirm.
 
 ## Also added
 
-`tools/wasm_to_source.py` from klaipher/nanogram `submodules/TgVoipWebrtc/tools/` (iOS 466d8350), the prerequisite of the
+`tools/wasm_to_source.py` from klaipher/nanogram (was `submodules/TgVoipWebrtc/tools/` at iOS 466d8350; now this fork's `tools/`), the prerequisite of the
 single reference-core embedding step.

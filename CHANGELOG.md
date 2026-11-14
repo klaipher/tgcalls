@@ -7,6 +7,7 @@ moved under their date when the app repositories pin them.
 
 ## Unreleased
 
+- Host test scripts under `tests/` default `TG_OWT` to `../../../webrtc` (the Mac app's submodules/webrtc, no `src/` level); docs now point at `ios/`, `tools/` and the webrtc fork instead of the removed tg_owt and old `submodules/TgVoipWebrtc` paths. `CLAUDE.md` lists `ios/` and `macos/`; `NANOGRAM-CHANGES.md` says `Package.swift` keeps `ios/` out of the target.
 - `Package.swift` (macOS SwiftPM target, root path `.`) excludes `ios/`: the iOS bridge added in the next entry down would otherwise be compiled into the Mac target (UIKit sources, duplicate `OngoingCallThreadLocalContext`). Mac-only manifest; no source change.
 - Merge of Android's `nanogram-android` (545f5ae) into this branch: one call engine for iOS, macOS and Android. `makeVideoSource` takes `bool screencapture` on every platform; `Descriptor` has both `audioLevelUpdated(float)` and `audioLevelsUpdated(float, float)` (`MakeAudioLevelsCallback`); `OnRenegotiationNeeded` goes through `requestRenegotiation()` (Android 03d7b86, ea0f24e); the Android platform layer is carried unchanged. Details and per-file resolutions: docs/NANOGRAM-MERGE.md
 - Android's behaviour changes in shared files are guarded with `WEBRTC_ANDROID` so iOS/macOS are unchanged: no last-frame replay in `VideoSinkImpl`, empty `ssrcGroups` ignored, `InstanceV2Impl` resets outgoing video/screencast channels on capture change or video off, `_currentUncroppedSink` is a `shared_ptr` (a `weak_ptr` expired on camera flip)

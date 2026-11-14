@@ -15,7 +15,7 @@ First version, assembled from commit subjects and the iOS repository's `docs/sub
 - Where: `tgcalls/platform/darwin/`, `macos/`, `Package.swift` (SwiftPM package for the Mac app).
 - Why: the Mac app has no platform layer upstream; battery and latency on Apple Silicon.
 - Upstream: no (Apple-only code), though the policies below are generic.
-- Sync: host tests in `tests/` and the Bazel policy tests (`TgVoipWebrtc/BUILD` in klaipher/nanogram); `Package.swift` must keep tools, docs and the wasm core out of the target.
+- Sync: host tests in `tests/` and the Bazel policy tests (`TgVoipWebrtc/BUILD` in klaipher/nanogram); `Package.swift` must keep `ios/`, tools, docs and the wasm core out of the target.
 
 ### iOS bridge
 - What: the Objective-C++ bridge for iOS (`OngoingCallThreadLocalContext`, `MediaStreaming`, `MediaUtils.h`, public headers, `TestNegotiation.mm`).
@@ -35,8 +35,8 @@ First version, assembled from commit subjects and the iOS repository's `docs/sub
 - Where: `tgcalls/LogSinkImpl.cpp`, `tgcalls/platform/`.
 - Upstream: yes.
 
-### Build against desktop-app tg_owt
-- What: macOS builds against `klaipher/tg_owt` (desktop-app's tg_owt, no TGCALLS SEAM patches); the iOS build uses the vendored `klaipher/webrtc`.
+### Build against the shared webrtc fork
+- What: macOS builds against `klaipher/webrtc` (submodules/webrtc in the Mac app; libtg_owt.a is still the output name of core-xprojects/webrtc/webrtc/build.sh). The TGCALLS SEAM-less path is selected by `TGCALLS_WEBRTC_WITHOUT_TELEGRAM_SEAMS` in `Package.swift`; the iOS build uses the same fork through Bazel.
 - Sync: seams must exist on both sides; see `NANOGRAM-CHANGES.md` in klaipher/webrtc and klaipher/tg_owt.
 
 ### Legacy v1 calls
