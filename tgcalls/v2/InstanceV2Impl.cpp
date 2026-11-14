@@ -1972,14 +1972,16 @@ public:
                 _videoCapture = nullptr;
                 _screencastCapture = videoCapture;
 
+                if (_outgoingVideoChannel) {
+                    _outgoingVideoChannel->setVideoCapture(nullptr);
+                }
                 if (_outgoingVideoChannelId) {
                     _contentNegotiationContext->removeOutgoingChannel(_outgoingVideoChannelId.value());
                     _outgoingVideoChannelId.reset();
                 }
-                if (_outgoingVideoChannel) {
-                    _outgoingVideoChannel->setVideoCapture(nullptr);
-                    _outgoingVideoChannel.reset();
-                }
+#ifdef WEBRTC_ANDROID
+                _outgoingVideoChannel.reset();
+#endif
 
                 if (_outgoingScreencastChannel) {
                     _outgoingScreencastChannel->setVideoCapture(videoCapture);
@@ -1991,43 +1993,49 @@ public:
                 _videoCapture = videoCapture;
                 _screencastCapture = nullptr;
 
-                if (_outgoingScreencastChannelId) {
-                    _contentNegotiationContext->removeOutgoingChannel(_outgoingScreencastChannelId.value());
-                    _outgoingScreencastChannelId.reset();
-                }
-                if (_outgoingScreencastChannel) {
-                    _outgoingScreencastChannel->setVideoCapture(nullptr);
-                    _outgoingScreencastChannel.reset();
-                }
-
                 if (_outgoingVideoChannel) {
                     _outgoingVideoChannel->setVideoCapture(videoCapture);
                 }
                 if (!_outgoingVideoChannelId) {
                     _outgoingVideoChannelId = _contentNegotiationContext->addOutgoingChannel(signaling::MediaContent::Type::Video);
                 }
+
+                if (_outgoingScreencastChannel) {
+                    _outgoingScreencastChannel->setVideoCapture(nullptr);
+                }
+                if (_outgoingScreencastChannelId) {
+                    _contentNegotiationContext->removeOutgoingChannel(_outgoingScreencastChannelId.value());
+                    _outgoingScreencastChannelId.reset();
+                }
+#ifdef WEBRTC_ANDROID
+                _outgoingScreencastChannel.reset();
+#endif
             }
         } else {
             _videoCapture = nullptr;
             _screencastCapture = nullptr;
 
+            if (_outgoingVideoChannel) {
+                _outgoingVideoChannel->setVideoCapture(nullptr);
+            }
+
+            if (_outgoingScreencastChannel) {
+                _outgoingScreencastChannel->setVideoCapture(nullptr);
+            }
+
             if (_outgoingVideoChannelId) {
                 _contentNegotiationContext->removeOutgoingChannel(_outgoingVideoChannelId.value());
                 _outgoingVideoChannelId.reset();
-            }
-            if (_outgoingVideoChannel) {
-                _outgoingVideoChannel->setVideoCapture(nullptr);
-                _outgoingVideoChannel.reset();
             }
 
             if (_outgoingScreencastChannelId) {
                 _contentNegotiationContext->removeOutgoingChannel(_outgoingScreencastChannelId.value());
                 _outgoingScreencastChannelId.reset();
             }
-            if (_outgoingScreencastChannel) {
-                _outgoingScreencastChannel->setVideoCapture(nullptr);
-                _outgoingScreencastChannel.reset();
-            }
+#ifdef WEBRTC_ANDROID
+            _outgoingVideoChannel.reset();
+            _outgoingScreencastChannel.reset();
+#endif
         }
 
         if (_handshakeCompleted) {
