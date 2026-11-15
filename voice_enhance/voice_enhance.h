@@ -19,7 +19,7 @@
  *            Bluetooth route, PHONE_FAR for the built-in mic, ANALYZE to only measure), ve_process on every capture
  *            buffer, ve_flush at the end (drop_latency=1), ve_destroy after. Build voice_enhance.cc with WebRTC's
  *            audio_processing.h and RNNoise (rnnoise.h) on the include path and link the same WebRTC and RNNoise as
- *            tgcalls; do not build with the host test macro VE_NO_APM.
+ *            tgcalls; do not put tests/voice_enhance/stub on the include path.
  * Host test: tests/voice_enhance/run.sh.
  */
 
