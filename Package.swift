@@ -24,6 +24,7 @@ let package = Package(
                       "docs",
                       "ios",
                       "tools",
+                      "voice_enhance",
                       "tgcalls/v2wasm",
                       "tgcalls/v2/MtProtoDtlsTransportTest.cpp",
                       "tgcalls/v2/MtProtoDtlsTransport.cpp",

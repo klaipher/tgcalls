@@ -8,6 +8,13 @@ implementation for iOS and macOS: the former `nanogram-mac` branch is merged int
 First version, assembled from commit subjects and the iOS repository's `docs/subsystems/tgcalls/`. Entries marked
 (check) were not re-verified against the code.
 
+### Voice enhancement core (shared)
+- What: the platform-neutral DSP of the "Voice enhancement" recording feature: C API `ve_create / ve_process / ve_flush / ve_delay_samples / ve_get_class / ve_get_level / ve_set_level / ve_take_average_block_micros / ve_destroy`, 48 kHz mono int16, profiles HEADSET, PHONE_FAR, ANALYZE. Uses WebRTC `AudioProcessing` (noise suppression, AGC2) and RNNoise.
+- Where: `voice_enhance/` (header comment says what each platform calls), host test `tests/voice_enhance/`. Android's JNI glue stays in the Android repository.
+- Why: one shared source for iOS, macOS and Android (owner rule); it was Android-only.
+- Upstream: no.
+- Sync: `Package.swift` excludes the directory until the Mac app wires it; the app's build needs WebRTC and RNNoise headers on the include path.
+
 ### macOS platform layer
 - What: ScreenCaptureKit screen sharing (GPU scale and convert, `SCShareableContent` picker), VideoToolbox decoders and
   H.265 encoder recovery, low-latency VideoToolbox rate control for call video, Metal renderer converts YCbCr with the
